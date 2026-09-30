@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Laptop Transfer</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Laptop Transfer</h1>
+    <p class="subtitle">Local Wi-Fi only &mdash; nothing leaves this network</p>
+  </header>
+
+  <main>
+    <section class="panel" id="drop-panel">
+      <h2>Send to laptop</h2>
+      <div id="dropzone" class="dropzone">
+        <p class="dropzone-label">Tap to choose files, or drag them here</p>
+        <p class="dropzone-hint">Any file type &middot; multiple at once &middot; folders too</p>
+        <input type="file" id="file-input" multiple hidden>
+      </div>
+      <button id="folder-picker-btn" class="text-btn" type="button">or choose a whole folder</button>
+      <input type="file" id="folder-input" webkitdirectory hidden>
+      <ul id="upload-list" class="upload-list"></ul>
+
+      <div class="divider"></div>
+      <h2>Send text to laptop</h2>
+      <textarea id="text-input" class="text-input" rows="4"
+                placeholder="Type or paste any length of text..."></textarea>
+      <div class="text-send-row">
+        <button id="send-text-btn" class="icon-btn" type="button">Send to Laptop</button>
+        <span id="send-text-status" class="file-meta"></span>
+      </div>
+    </section>
+
+    <section class="panel" id="files-panel">
+      <div class="panel-header-row">
+        <h2>Get from laptop</h2>
+        <button id="refresh-btn" class="text-btn" type="button">Refresh</button>
+      </div>
+      <ul id="file-list" class="file-list">
+        <li class="empty-state">Loading&hellip;</li>
+      </ul>
+
+      <div class="divider"></div>
+      <div class="panel-header-row">
+        <h2>Text from laptop</h2>
+        <button id="text-refresh-btn" class="text-btn" type="button">Refresh</button>
+      </div>
+      <div id="text-from-laptop" class="text-display empty-state">Nothing yet</div>
+      <div class="text-actions" id="text-from-laptop-actions" hidden>
+        <button id="copy-laptop-text-btn" class="icon-btn" type="button">Copy</button>
+        <button id="download-laptop-text-btn" class="icon-btn" type="button">Download</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,230 @@
+:root {
+  --bg: #14181c;
+  --panel: #1d2329;
+  --panel-border: #2b333b;
+  --text: #e8ecef;
+  --text-muted: #8a97a0;
+  --accent: #3fb6a8;
+  --accent-dim: #2c8074;
+  --danger: #e0665a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.4;
+  padding-bottom: 3rem;
+}
+
+.topbar {
+  padding: 1.75rem 1.25rem 1rem;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.topbar h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.4rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+main {
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 1.1rem;
+}
+
+.panel h2 {
+  margin: 0 0 0.8rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.panel-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.panel-header-row h2 { margin: 0; }
+
+.dropzone {
+  border: 1.5px dashed var(--panel-border);
+  border-radius: 8px;
+  padding: 2rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.dropzone.drag-active {
+  border-color: var(--accent);
+  background: rgba(63, 182, 168, 0.08);
+}
+
+.dropzone-label {
+  margin: 0 0 0.3rem;
+  font-size: 0.95rem;
+}
+
+.dropzone-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.upload-list, .file-list {
+  list-style: none;
+  margin: 0.9rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.upload-list:empty { margin-top: 0; }
+
+.file-row, .upload-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 48px;
+  padding: 0.5rem 0.6rem;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+}
+
+.file-info { min-width: 0; }
+
+.file-name {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+.file-meta {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.icon-btn {
+  flex-shrink: 0;
+  background: var(--accent-dim);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 0.8rem;
+  font-size: 0.8rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.icon-btn:active { background: var(--accent); }
+
+.text-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0.25rem;
+}
+
+.upload-row.status-uploading .file-meta { color: var(--accent); }
+.upload-row.status-error .file-meta { color: var(--danger); }
+.upload-row.status-done .file-meta { color: var(--text-muted); }
+
+.empty-state {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  padding: 0.5rem 0.1rem;
+}
+
+.room-qr {
+  display: block;
+  margin: 0.6rem auto;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+}
+
+#folder-picker-btn {
+  display: block;
+  margin: 0.5rem auto 0;
+}
+
+.divider {
+  height: 1px;
+  background: var(--panel-border);
+  margin: 1.1rem 0;
+  border: none;
+}
+
+.text-input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 0.85rem;
+  padding: 0.6rem;
+  resize: vertical;
+}
+
+.text-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.text-send-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.6rem;
+}
+
+.text-display {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 0.85rem;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 0.7rem;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 0.6rem;
+}
+
+.text-actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+}

@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Personal data - never publish
+config.json
+config.json.bak
+logs/
+ReceivedFromPhone/
+ShareToPhone/
+rooms/
+
+# Big/unneeded files
+*.apk
+*.zip
+*.log
+Thumbs.db
