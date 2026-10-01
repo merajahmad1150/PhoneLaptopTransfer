@@ -17,6 +17,7 @@ Design goals per the user's stated preferences:
 
 import os
 import shutil
+import subprocess
 import threading
 import time
 import tkinter as tk
@@ -45,6 +46,7 @@ class MainWindow:
         self.server = TransferServer(cfg)
         self._qr_photo = None  # keep a reference so Tkinter doesn't garbage-collect it
         self._public_qr_photo = None
+        self._received_files = []  # newest first; index matches self.received_listbox rows
 
         root.title("Phone \u2194 Laptop Transfer")
         root.geometry("580x720")
@@ -87,6 +89,7 @@ class MainWindow:
         self._build_settings_tab()
 
         self.server.text_store.on_new_to_laptop(self._on_text_received_threadsafe)
+        self.server.on_file_received(self._on_file_received_threadsafe)
         attach_gui_sink(self._append_log_threadsafe)
         log.info("Application window ready")
 
@@ -154,6 +157,22 @@ class MainWindow:
                    command=self._safe(self._clear_share_folder)).pack(side="left", padx=(6, 0))
         ttk.Button(clear_row, text="Clear Text History...",
                    command=self._safe(self._clear_text_history)).pack(side="left", padx=(6, 0))
+
+        recv_frame = ttk.LabelFrame(tab, text="Recently Received Files (double-click to open)")
+        recv_frame.pack(fill="x", padx=10, pady=(0, 10))
+        self.received_listbox = tk.Listbox(recv_frame, height=6, bg=theme.PANEL, fg=theme.TEXT,
+                                            selectbackground=theme.ACCENT, selectforeground=theme.ON_ACCENT,
+                                            relief="flat", highlightthickness=1,
+                                            highlightbackground=theme.PANEL_BORDER, font=("Consolas", 9))
+        self.received_listbox.pack(fill="x", padx=6, pady=(6, 4))
+        self.received_listbox.bind("<Double-Button-1>", self._safe(self._open_selected_received_file))
+
+        recv_btn_row = ttk.Frame(recv_frame)
+        recv_btn_row.pack(fill="x", padx=6, pady=(0, 6))
+        ttk.Button(recv_btn_row, text="Show in Explorer", style="Accent.TButton",
+                   command=self._safe(self._show_selected_received_file)).pack(side="left")
+        ttk.Button(recv_btn_row, text="Open File",
+                   command=self._safe(self._open_selected_received_file)).pack(side="left", padx=(6, 0))
 
         ttk.Label(tab, text="Live log").pack(anchor="w", padx=10)
         self.log_widget = scrolledtext.ScrolledText(tab, height=10, state="disabled", font=("Consolas", 8))
@@ -427,6 +446,64 @@ class MainWindow:
             self.root.after(0, do_add)
         except RuntimeError:
             pass  # window already destroyed
+
+    def _on_file_received_threadsafe(self, path: Path):
+        # Called from the Flask thread when a file finishes uploading from
+        # the phone; hop over to the main thread before touching Tkinter.
+        def do_add():
+            self._received_files.insert(0, path)
+            del self._received_files[200:]  # cap growth over long-running sessions
+            try:
+                size_mb = path.stat().st_size / (1024 * 1024)
+            except OSError:
+                size_mb = 0.0
+            ts = time.strftime("%H:%M:%S")
+            self.received_listbox.insert(0, f"{ts}  ({size_mb:.1f} MB)  {path.name}")
+            if self.received_listbox.size() > 200:
+                self.received_listbox.delete(200, "end")
+            self.received_listbox.selection_clear(0, "end")
+            self.received_listbox.selection_set(0)
+        try:
+            self.root.after(0, do_add)
+        except RuntimeError:
+            pass  # window already destroyed
+
+    def _selected_received_path(self):
+        sel = self.received_listbox.curselection()
+        if not sel or sel[0] >= len(self._received_files):
+            messagebox.showwarning("Nothing selected", "Select a received file from the list first.")
+            return None
+        path = self._received_files[sel[0]]
+        if not path.exists():
+            messagebox.showwarning("File not found", f"This file no longer exists:\n{path}\n\n"
+                                                        "It may have been moved or cleared already.")
+            return None
+        return path
+
+    def _show_selected_received_file(self):
+        path = self._selected_received_path()
+        if not path:
+            return
+        try:
+            # /select, highlights the exact file in Explorer instead of just
+            # opening its containing folder - much faster to spot than
+            # having to hunt for it yourself.
+            subprocess.Popen(["explorer", "/select,", str(path)])
+            log.info("Showed '%s' in Explorer", path.name)
+        except OSError as exc:
+            log.error("Could not open Explorer for '%s': %s", path, exc, exc_info=True)
+            messagebox.showerror("Couldn't open Explorer", f"File is at:\n{path}")
+
+    def _open_selected_received_file(self, event=None):
+        path = self._selected_received_path()
+        if not path:
+            return
+        try:
+            os.startfile(path)  # opens with whatever app Windows has associated with this file type
+            log.info("Opened '%s' with its default app", path.name)
+        except OSError as exc:
+            log.error("Could not open '%s': %s", path, exc, exc_info=True)
+            messagebox.showerror("Couldn't open file", f"File is at:\n{path}")
 
     def _on_text_select(self, event=None):
         sel = self.text_listbox.curselection()

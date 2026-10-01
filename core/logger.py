@@ -73,6 +73,15 @@ def setup_logging(log_dir: Path, level=logging.DEBUG) -> logging.Logger:
     gui_handler.setFormatter(formatter)
     logger.addHandler(gui_handler)
 
+    # waitress (the production WSGI server) logs through its own "waitress"
+    # logger, not ours - route it into the same file/console/GUI sinks so
+    # nothing about serving requests is silently invisible.
+    waitress_logger = logging.getLogger("waitress")
+    waitress_logger.setLevel(level)
+    for handler in (file_handler, console_handler, gui_handler):
+        waitress_logger.addHandler(handler)
+    waitress_logger.propagate = False  # avoid double-printing via the root logger's default handler
+
     # Catch anything unhandled anywhere in the process and log it in full,
     # instead of the app silently vanishing.
     def _log_unhandled(exc_type, exc_value, exc_tb):

@@ -14,6 +14,18 @@ mouse-controlled screen mirroring of the phone too.
   any phone browser, no app install needed on the phone. On the laptop
   side, **Add Files to Send to Phone...** / **Add Folder to Send to
   Phone...** make anything instantly available for the phone to pull.
+  Runs on **waitress**, a production-grade WSGI server, since this tool
+  tends to get left running for days at a time.
+- **Recently Received Files** — every file that arrives from the phone
+  shows up live in a list with **Show in Explorer** (jumps straight to
+  it, already selected) and **Open File** buttons, so finding what just
+  arrived never means digging through Explorer yourself.
+- **Stays on local Wi-Fi when it can** — if you're on the same Wi-Fi as
+  the laptop, the Wi-Fi Transfer tab's QR code/link never touches the
+  internet at all; it's a direct local connection. If a page is ever
+  opened through the public internet link while that's avoidable, a
+  banner suggests the local one instead (see "Local Wi-Fi vs the
+  internet" below).
 - **Text (any length, either direction)** — a dedicated Text tab on the
   laptop and a text box on the phone page. Whatever's sent shows up with
   a **Copy** button and a **Save As...** dialog that lets you browse to
@@ -106,6 +118,22 @@ to use the tool:
 - Since this uses your PC's own disk and bandwidth, only enable it while
   you actually intend for someone else to be using it.
 
+## Local Wi-Fi vs the internet
+
+The **Wi-Fi Transfer tab's** QR code/link (`http://<your-laptop's-LAN-IP>:<port>`)
+is a direct connection between your phone and laptop over your own
+router — it never touches the internet and can't use mobile data, full
+stop, regardless of how large the file is.
+
+The **Public Access / Shared Rooms** links are different: they go out to
+Tailscale's infrastructure and back, even if you're sitting right next to
+the laptop on the same Wi-Fi. There's no way for a web page to force that
+traffic back onto the local network once you've chosen to connect via the
+public link — so instead, if a page detects it was reached that way, it
+shows a small banner with the direct local link as a one-tap alternative.
+If you're home and don't need the internet-anywhere access, prefer the
+Wi-Fi Transfer tab's own QR code/link from the start.
+
 ## A note on whole-folder transfer from the phone
 
 Real folder drag-and-drop is a desktop browser feature. On Android,
@@ -124,6 +152,7 @@ phone-laptop-transfer/
 ├── requirements.txt
 ├── README.md
 ├── SETUP_GUIDE.md
+├── CHANGELOG.md                # Full version history - new entries appended here
 ├── core/                       # All .py files live here
 │   ├── run.py                    # Entry point
 │   ├── config.py                 # Settings load/save (config.json)
@@ -201,6 +230,11 @@ A few ideas worth considering later, based on how similar tools
   a file finishes uploading, useful if you've alt-tabbed away.
 - **System tray minimize** — keep the server running in the tray instead
   of needing the window open, so it doesn't get in the way while editing.
+- **Text history search** — a search box in the Text tab, now that
+  history can hold up to 200 entries per direction.
+- **Quick Share room preset** — a short-lived (e.g. 30-minute) Shared
+  Room option alongside the current 24-hour default, for one-off
+  sensitive shares (how SpeedyShare/ClipShare-style tools default).
 
 None of these are built yet — happy to add any of them if useful.
 
@@ -208,4 +242,17 @@ None of these are built yet — happy to add any of them if useful.
 
 If you ask for a small fix or feature change later, you'll be given just
 the changed file(s) with instructions on which existing file to overwrite
-— not a full re-zip of the whole project.
+— not a full re-zip of the whole project, unless the change touches
+enough files that a partial update would be more confusing than helpful.
+
+Every change gets appended to `CHANGELOG.md` as a new version section
+(same file, not a new one each time) — check there for the full history.
+
+## Sending the log file
+
+`logs\transfer.log` is written in full detail by design — every request,
+every file transferred, every error, and now (from v1.9) every HTTP
+request's method/path/status too. After using the tool for a while,
+sending that file back is the fastest way to catch bugs or find
+improvements before they become annoying — worth doing after any update,
+and any time something seems off.

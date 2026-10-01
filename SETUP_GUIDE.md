@@ -102,6 +102,19 @@ the project folder, with subfolders preserved for whole-folder
 transfers). Files you add for the phone go into the "Share folder"
 (default: `ShareToPhone`).
 
+**Finding a file you just received**: no need to open Explorer — the
+Wi-Fi Transfer tab's **Recently Received Files** list shows everything as
+it arrives. Double-click an entry (or select it and click **Open File**)
+to open it with its default app, or click **Show in Explorer** to jump
+straight to it, already selected, in a File Explorer window.
+
+**If you ever see a banner** on the phone/room page suggesting a local
+link instead — that means the page was opened through the public
+internet link rather than directly over Wi-Fi. Tapping the suggested
+link switches to a connection that stays entirely on your own network
+(see "Local Wi-Fi vs the internet" in README.md for why this can't be
+done automatically).
+
 ## 7. Optional: ADB tab (faster wired transfer)
 
 Only needed if you want direct USB transfer instead of/alongside Wi-Fi.
@@ -257,3 +270,9 @@ actively lending it out.
 - **A room disappeared**: rooms auto-delete after the configured
   inactivity period (24h by default) and don't survive an app restart —
   both by design, to avoid leftover strangers' files piling up.
+- **"Show in Explorer" says the file no longer exists**: it was moved or
+  deleted (manually, or via "Clear Received Files") since it arrived —
+  the list shows history, not a live guarantee the file is still there.
+- **The LAN-link banner doesn't disappear after I dismiss it**: dismissing
+  only hides it for that page load; it's not meant to be permanent, since
+  whether it's needed can change from one visit to the next.

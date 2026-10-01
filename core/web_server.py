@@ -44,6 +44,7 @@ from flask import Flask, jsonify, redirect, render_template, request, send_from_
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+import net_utils
 import room_manager
 from logger import get_logger
 from qr_helper import make_qr_data_uri
@@ -77,7 +78,22 @@ class TransferServer:
         self._running = False
         self._cleanup_thread = None
         self._cleanup_stop_event = threading.Event()
+        self._file_received_callbacks = []
         self._register_routes()
+
+    def on_file_received(self, callback) -> None:
+        """Register a callback(full_path: Path) fired whenever a file
+        finishes uploading from the phone - lets the GUI show a live
+        "Recently Received" list instead of the user having to go dig
+        through Explorer to find what just arrived."""
+        self._file_received_callbacks.append(callback)
+
+    def _notify_file_received(self, path: Path) -> None:
+        for callback in list(self._file_received_callbacks):
+            try:
+                callback(path)
+            except Exception:
+                log.error("A file-received listener raised an error", exc_info=True)
 
     # ------------------------------------------------------------------ #
     # Route setup
@@ -92,6 +108,14 @@ class TransferServer:
             # never let a browser or intermediate proxy serve a cached
             # copy instead of asking again.
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            return response
+
+        @app.after_request
+        def access_log(response):
+            # Full transparency on every request, not just the ones with
+            # their own dedicated log line - nothing about traffic through
+            # this server should be invisible.
+            log.debug("%s %s -> %s", request.method, request.path, response.status)
             return response
 
         @app.errorhandler(Exception)
@@ -141,7 +165,7 @@ class TransferServer:
 
         @app.route("/")
         def index():
-            return render_template("index.html")
+            return render_template("index.html", **self._lan_tip_context("/"))
 
         @app.route("/upload", methods=["POST"])
         def upload():
@@ -182,6 +206,7 @@ class TransferServer:
                     rel, size_mb, elapsed, speed, dest_path,
                 )
                 saved.append(str(Path(*segments)))
+                self._notify_file_received(dest_path)
 
             return jsonify({"ok": True, "saved": saved})
 
@@ -215,7 +240,7 @@ class TransferServer:
                 return jsonify({"ok": False, "error": "Invalid filename"}), 400
             if not target.exists():
                 return jsonify({"ok": False, "error": "File not found"}), 404
-            log.info("Sending '%s' to phone", target.name)
+            self._log_download(target.name)
             return send_from_directory(share_dir, safe_name, as_attachment=True)
 
         @app.route("/text/to-laptop", methods=["POST"])
@@ -256,7 +281,8 @@ class TransferServer:
             room_manager.touch_room(code)
             room_url = request.host_url.rstrip("/") + url_for("room_page", code=code)
             qr_data_uri = make_qr_data_uri(room_url)
-            return render_template("room.html", code=code, room_url=room_url, qr_data_uri=qr_data_uri)
+            return render_template("room.html", code=code, room_url=room_url, qr_data_uri=qr_data_uri,
+                                    **self._lan_tip_context(f"/room/{code}"))
 
         @app.route("/room/<code>/upload", methods=["POST"])
         def room_upload(code):
@@ -329,6 +355,7 @@ class TransferServer:
             if not target.exists():
                 return jsonify({"ok": False, "error": "File not found"}), 404
             room_manager.touch_room(code)
+            self._log_download(target.name, prefix=f"Room {code}: ")
             return send_from_directory(room_dir, target.relative_to(room_dir), as_attachment=True)
 
         @app.route("/room/<code>/text", methods=["POST"])
@@ -367,6 +394,36 @@ class TransferServer:
                 return candidate
             i += 1
 
+    def _lan_tip_context(self, path_suffix: str = "/") -> dict:
+        """
+        If this request came through Tailscale Funnel (i.e. over the
+        internet) rather than direct LAN access, work out the local Wi-Fi
+        alternative so the page can nudge the visitor toward it - same
+        Wi-Fi as the laptop means no mobile data use, since the request
+        never has to leave the network. X-Forwarded-Proto is only ever
+        set by the reverse proxy (Funnel), never present on a direct LAN
+        request, so its presence alone is a reliable signal either way.
+        """
+        via_tunnel = bool(request.headers.get("X-Forwarded-Proto"))
+        lan_url = None
+        if via_tunnel:
+            ip = net_utils.get_local_ip()
+            port = self.cfg.get("server_port", 8765)
+            lan_url = f"http://{ip}:{port}{path_suffix}"
+        return {"via_tunnel": via_tunnel, "lan_url": lan_url}
+
+    @staticmethod
+    def _log_download(name: str, prefix: str = "") -> None:
+        """Log a download, noting the Range header if present. Browsers
+        fetch large files (videos, APKs) using several parallel byte-range
+        requests, which otherwise shows up as several near-identical
+        "Sending X" lines back to back and reads like a confusing repeat
+        send rather than what it actually is - one download, several
+        chunks."""
+        range_header = request.headers.get("Range")
+        suffix = f" (range: {range_header})" if range_header else ""
+        log.info("%sSending '%s' to device%s", prefix, name, suffix)
+
     # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #
@@ -374,19 +431,23 @@ class TransferServer:
         if self._running:
             log.debug("Server start requested but already running")
             return
-        from werkzeug.serving import make_server
+        # waitress is a production-grade WSGI server (unlike Werkzeug's
+        # built-in dev server, which prints its own "do not use in
+        # production" warning) - a meaningfully better fit given this app
+        # is routinely left running for days at a time.
+        from waitress.server import create_server
 
         port = self.cfg["server_port"]
         try:
-            self._httpd = make_server("0.0.0.0", port, self.app, threaded=True)
+            self._httpd = create_server(self.app, host="0.0.0.0", port=port, threads=8)
         except OSError as exc:
             log.error("Failed to bind server to port %s: %s", port, exc, exc_info=True)
             raise
 
-        self._server_thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._server_thread = threading.Thread(target=self._httpd.run, daemon=True)
         self._server_thread.start()
         self._running = True
-        log.info("Server started on 0.0.0.0:%s", port)
+        log.info("Server started on 0.0.0.0:%s (waitress, 8 worker threads)", port)
 
         self._cleanup_stop_event.clear()
         self._cleanup_thread = threading.Thread(target=self._room_cleanup_loop, daemon=True)
@@ -407,7 +468,7 @@ class TransferServer:
             return
         log.info("Stopping server...")
         self._cleanup_stop_event.set()
-        self._httpd.shutdown()
+        self._httpd.close()  # closes the listening socket(s), which makes .run() return
         self._server_thread.join(timeout=5)
         self._running = False
         log.info("Server stopped")

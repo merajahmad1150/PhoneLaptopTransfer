@@ -13,6 +13,14 @@
   </header>
 
   <main>
+    {% if via_tunnel and lan_url %}
+    <div class="tip-banner" id="lan-tip-banner">
+      <span>You're connecting over the internet right now. If both devices are
+      on the same Wi-Fi as the laptop, use <a href="{{ lan_url }}">{{ lan_url }}</a>
+      instead &mdash; it stays on your local network and won't use mobile data.</span>
+      <button type="button" id="dismiss-tip-btn" aria-label="Dismiss">&times;</button>
+    </div>
+    {% endif %}
     <section class="panel" id="join-panel">
       <h2>Pair your other device</h2>
       <p class="dropzone-hint">Scan this with your phone (or open the link there) to join the same room:</p>

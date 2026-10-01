@@ -13,6 +13,14 @@
   </header>
 
   <main>
+    {% if via_tunnel and lan_url %}
+    <div class="tip-banner" id="lan-tip-banner">
+      <span>You're connecting over the internet right now. If you're on the
+      same Wi-Fi as the laptop, use <a href="{{ lan_url }}">{{ lan_url }}</a>
+      instead &mdash; it stays on your local network and won't use mobile data.</span>
+      <button type="button" id="dismiss-tip-btn" aria-label="Dismiss">&times;</button>
+    </div>
+    {% endif %}
     <section class="panel" id="drop-panel">
       <h2>Send to laptop</h2>
       <div id="dropzone" class="dropzone">

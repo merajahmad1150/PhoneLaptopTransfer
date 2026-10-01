@@ -333,4 +333,11 @@
 
   textRefreshBtn.addEventListener("click", refreshLaptopText);
   refreshLaptopText();
+
+  const dismissTipBtn = document.getElementById("dismiss-tip-btn");
+  if (dismissTipBtn) {
+    dismissTipBtn.addEventListener("click", () => {
+      document.getElementById("lan-tip-banner").style.display = "none";
+    });
+  }
 })();
