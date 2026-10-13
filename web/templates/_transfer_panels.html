@@ -1,0 +1,44 @@
+{% from "_icons.html" import icon %}
+{# Shared by the personal page and the room page. #}
+<section class="panel" id="drop-panel">
+  <h2><span class="chip c-orange">{{ icon('upload') }}</span> {{ send_title }}</h2>
+  <div id="dropzone" class="dropzone">
+    <p class="dropzone-label">Tap to choose files, or drag them here</p>
+    <p class="dropzone-hint">Any file type &middot; many at once &middot; folders too</p>
+    <input type="file" id="file-input" multiple hidden>
+  </div>
+  <div class="row-actions">
+    <button id="folder-picker-btn" class="text-btn" type="button">or choose a whole folder</button>
+    <button id="clear-done-btn" class="text-btn" type="button" hidden>Clear finished</button>
+  </div>
+  <input type="file" id="folder-input" webkitdirectory hidden>
+  <div id="batch-summary" class="batch-summary" hidden></div>
+  <ul id="upload-list" class="upload-list"></ul>
+
+  <div class="divider"></div>
+  <h2><span class="chip c-pink">{{ icon('text') }}</span> {{ text_send_title }}</h2>
+  <textarea id="text-input" class="text-input" rows="4" dir="auto"
+            placeholder="Type or paste any length of text (Urdu, Hindi, English...)"></textarea>
+  <div class="text-send-row">
+    <button id="send-text-btn" class="icon-btn" type="button">{{ text_send_button }}</button>
+    <span id="send-text-status" class="file-meta"></span>
+  </div>
+</section>
+
+<section class="panel" id="files-panel">
+  <div class="panel-header-row">
+    <h2><span class="chip c-teal">{{ icon('download') }}</span> {{ get_title }}</h2>
+    <button id="refresh-btn" class="text-btn" type="button">Refresh</button>
+  </div>
+  <ul id="file-list" class="file-list"><li class="empty-state">Loading&hellip;</li></ul>
+
+  <div class="divider"></div>
+  <div class="panel-header-row">
+    <h2><span class="chip c-violet">{{ icon('inbox') }}</span> {{ text_get_title }}</h2>
+    <button id="text-refresh-btn" class="text-btn" type="button">Refresh</button>
+  </div>
+  <ul id="text-list" class="file-list"><li class="empty-state">Nothing yet</li></ul>
+  {% if visible_hours and visible_hours > 0 %}
+  <p class="dropzone-hint hint-hours">Items disappear from this page after {{ visible_hours|round|int }} hours. They stay saved on the laptop.</p>
+  {% endif %}
+</section>

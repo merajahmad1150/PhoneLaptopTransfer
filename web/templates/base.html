@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#1b1442">
+<title>{% block title %}{{ app_name }}{% endblock %}</title>
+<link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <img class="logo" src="{{ url_for('static', filename='logo.png') }}" alt="" width="46" height="46">
+    <div class="titles">
+      <h1>{% block h1 %}{{ app_name }}{% endblock %}</h1>
+      <p class="subtitle">{% block subtitle %}{% endblock %}</p>
+    </div>
+  </header>
+  <main>{% block main %}{% endblock %}</main>
+  <footer class="foot">{{ app_name }} v{{ version }}</footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

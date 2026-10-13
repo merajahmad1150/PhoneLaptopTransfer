@@ -1,18 +1,25 @@
+# Python / environments (Start.bat recreates these)
 __pycache__/
 *.pyc
 .venv/
 venv/
+.uv/
 
 # Personal data - never publish
 config.json
 config.json.bak
+config.json.tmp
 logs/
+data/
+temp/
 ReceivedFromPhone/
 ShareToPhone/
+ReceivedText/
 rooms/
 
 # Big/unneeded files
 *.apk
 *.zip
 *.log
+*.part
 Thumbs.db

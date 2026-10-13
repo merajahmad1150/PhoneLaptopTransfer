@@ -1,14 +1,14 @@
 """
 core/config.py
-Handles loading and saving persistent app settings (config.json).
+Loads and saves persistent settings (config.json) and defines every folder
+the tool uses. EVERYTHING lives inside the project folder (wherever you put
+it, e.g. D:\\Tools\\PhoneLaptopTransfer\\) so nothing is scattered across
+drives and nothing is written to C:. That includes the temp folder used for
+large uploads (BASE_DIR\\temp) - see run.py, which points Python's temp
+directory there.
 
-Everything the app owns (config.json, logs/, and the default upload/share
-folders) lives INSIDE the project folder itself - wherever you placed it -
-rather than a separately hardcoded path. Earlier versions hardcoded
-D:\\Tools\\PhoneLaptopTransfer\\ for app data regardless of where the
-project was actually unzipped (e.g. D:\\Tools\\phone-laptop-transfer\\),
-which created two unrelated folders. Tying BASE_DIR to __file__ means
-there's only ever one folder, no matter what you name or where you put it.
+New keys added in later versions are back-filled automatically into an
+existing config.json, so upgrading never loses your settings.
 """
 
 import json
@@ -19,49 +19,97 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = BASE_DIR / "config.json"
 
 DEFAULTS = {
+    # ---- server ----
     "server_port": 8765,
-    # Folder where files uploaded FROM the phone land on the laptop
+    "bind_host": "0.0.0.0",
     "download_folder": str(BASE_DIR / "ReceivedFromPhone"),
-    # Folder the laptop exposes so the phone can browse/download files
     "share_folder": str(BASE_DIR / "ShareToPhone"),
-    "adb_path": "adb",  # assumes adb is on PATH; user can override in Settings
-    "syncthing_path": "syncthing",  # assumes on PATH; user can override
+    "text_folder": str(BASE_DIR / "ReceivedText"),
+    "auto_start_server": True,
+    # How the tool opens: "ask" (show the choice dialog every time),
+    # "gui" (desktop window) or "web" (no window; control it from any browser
+    # on the same Wi-Fi at /admin).
+    "startup_mode": "ask",
+    # ---- history / privacy of the phone page ----
+    # Items disappear from the PHONE PAGE after this many hours, but stay saved
+    # on the laptop (data/history.jsonl, ReceivedText/, ReceivedFromPhone/).
+    # 0 = never hide.
+    "frontend_visible_hours": 6,
+    # ---- clipboard ----
+    # Text sent from the phone over the LOCAL Wi-Fi is copied to the laptop
+    # clipboard automatically (never for internet/public-link visitors).
+    "auto_copy_text": True,
+    # ---- GUI behaviour ----
+    "right_click_pastes": True,
+    "last_tab": "transfer",
+    # ---- tools ----
+    "adb_path": "adb",
+    "syncthing_path": "syncthing",
     "syncthing_web_ui": "http://127.0.0.1:8384",
-    "scrcpy_path": "scrcpy",  # assumes on PATH; user can override in Settings
-    # Conservative defaults for modest/older hardware (no dedicated GPU) -
-    # a full-resolution phone mirror can be laggy to decode on integrated
-    # graphics, so these keep it smooth rather than pretty by default.
+    "scrcpy_path": "scrcpy",
     "scrcpy_max_size": 800,
     "scrcpy_bitrate_mbps": 4,
     "scrcpy_max_fps": 30,
     "scrcpy_turn_screen_off": False,
-    # Points at the user's existing universal Tailscale Funnel publisher
-    # (D:\Tools\tailscale-publisher\PUBLISH-TOOL.bat) - this app doesn't call
-    # tailscale.exe itself, it hands off to that already-working tool so
-    # every published tool goes through the same consistent script.
+    "uxplay_path": "",                # optional AirPlay receiver for iPhone mirroring (same Wi-Fi)
+    # ---- public access (Tailscale Funnel) ----
     "tailscale_publisher_path": r"D:\Tools\tailscale-publisher\PUBLISH-TOOL.bat",
-    # Off by default (matches previous LAN-only behavior); the Public Access
-    # tab strongly suggests turning this on before publishing to the internet.
+    "tailscale_exe": "",              # blank = auto-find (PATH + usual install folders)
+    "auto_detect_public_url": True,   # watch Tailscale and show the live public URL by itself
+    "public_url_manual": "",          # optional fallback if auto-detect can't see your publisher
     "require_access_pin": False,
     "access_pin": "",
-    # Shared Rooms: lets strangers with the public link pair their OWN
-    # laptop+phone via a private room, isolated from the owner's personal
-    # share. Off by default - opening an upload endpoint to anyone with a
-    # link is a different risk than the owner's own PIN-gated page, so this
-    # is opt-in, with a size cap and auto-expiry as a safety net.
+    # ---- shared rooms ----
     "rooms_enabled": False,
     "room_max_age_hours": 24,
     "room_max_file_mb": 500,
-    "last_tab": "transfer",
+    "room_max_total_mb": 2048,
+    "room_max_rooms": 20,
+    "room_max_text_kb": 256,
+    # ---- speed tuning (see README "Transfer speed") ----
+    "server_threads": 8,
+    "parallel_uploads": 3,            # phone page uploads this many files at once
+    "inbuf_overflow_mb": 128,         # uploads up to this size stay in RAM (no temp file)
+    "socket_buffer_kb": 256,          # waitress recv/send chunk size
+    "min_free_space_mb": 500,         # refuse uploads that would leave less than this free
+    # ---- logs ----
+    "log_keep_sessions": 500,
 }
+
+# Keys whose values must never be written to logs
+SECRET_KEYS = ("access_pin",)
+
+
+def redacted(cfg: dict) -> dict:
+    """Copy of the config that is safe to print/log (PIN hidden)."""
+    return {k: ("***hidden***" if k in SECRET_KEYS and v else v) for k, v in cfg.items()}
+
+
+def data_dir() -> Path:
+    d = BASE_DIR / "data"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def temp_dir() -> Path:
+    d = BASE_DIR / "temp"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def logs_dir() -> Path:
+    d = BASE_DIR / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def ensure_dirs(cfg: dict) -> None:
-    """Create the base dir + configured folders if they don't exist yet."""
-    for key in ("download_folder", "share_folder"):
+    """Create every folder the tool uses if it doesn't exist yet."""
+    for key in ("download_folder", "share_folder", "text_folder"):
         Path(cfg[key]).mkdir(parents=True, exist_ok=True)
-    BASE_DIR.mkdir(parents=True, exist_ok=True)
-    (BASE_DIR / "logs").mkdir(parents=True, exist_ok=True)
+    data_dir()
+    temp_dir()
+    logs_dir()
 
 
 def load_config() -> dict:
@@ -74,9 +122,10 @@ def load_config() -> dict:
         return cfg
 
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
             cfg = json.load(f)
-        # Backfill any missing keys (e.g. after an app upgrade added new settings)
+        if not isinstance(cfg, dict):
+            raise ValueError("config.json is not a JSON object")
         changed = False
         for k, v in DEFAULTS.items():
             if k not in cfg:
@@ -84,10 +133,13 @@ def load_config() -> dict:
                 changed = True
         if changed:
             save_config(cfg)
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, ValueError):
         # Corrupt config: back it up and start fresh rather than crashing
         try:
-            CONFIG_PATH.rename(CONFIG_PATH.with_suffix(".json.bak"))
+            backup = CONFIG_PATH.with_suffix(".json.bak")
+            if backup.exists():
+                backup.unlink()
+            CONFIG_PATH.rename(backup)
         except OSError:
             pass
         cfg = dict(DEFAULTS)
@@ -98,12 +150,10 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict) -> None:
+    """Atomic save (write to a temp file, then replace) so a crash or power
+    cut mid-save can never leave a half-written config.json."""
     BASE_DIR.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+    tmp = CONFIG_PATH.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
-
-
-def logs_dir() -> Path:
-    d = BASE_DIR / "logs"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    tmp.replace(CONFIG_PATH)

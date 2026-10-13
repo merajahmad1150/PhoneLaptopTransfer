@@ -1,102 +1,141 @@
 """
 core/theme.py
-A dark theme with a colour-gradient header for the Tkinter GUI. Centralized
-here so the whole app shares one palette instead of colors scattered
-across individual widget calls. Uses ttk's 'clam' base theme since it's
-the only built-in one that allows full color overrides on Windows (the
-default 'vista' theme ignores most style colors).
+Colour gradient look: deep indigo panels with a purple -> blue -> teal gradient
+header (with the tool's logo) and bright accent colours. Everything is drawn
+with Pillow so the gradient is smooth, cached, and cheap to redraw (the old
+header drew one canvas line per pixel on every resize).
 """
 
 import tkinter as tk
 from tkinter import ttk
 
-BG = "#14181c"
-PANEL = "#1d2329"
-PANEL_BORDER = "#2b333b"
-TEXT = "#e8ecef"
-TEXT_MUTED = "#8a97a0"
-ACCENT = "#3fb6a8"       # teal - primary actions
-ACCENT_DIM = "#2c8074"
-ACCENT2 = "#6a5acd"      # slate purple - gradient's other end
-DANGER = "#e0665a"
-ON_ACCENT = "#0d1117"    # dark text for use on top of the bright accent color
+from PIL import Image, ImageTk
+
+BG = "#0f0d24"
+PANEL = "#1c1844"
+PANEL_ALT = "#221d52"
+PANEL_BORDER = "#342d70"
+TEXT = "#f1efff"
+TEXT_MUTED = "#a39fd0"
+ACCENT = "#22d3b8"
+ACCENT_DARK = "#14a994"
+ACCENT_2 = "#7c4dff"
+ON_ACCENT = "#06231f"
+DANGER = "#ff6b6b"
+OK = "#34d67a"
+WARN = "#ffb020"
+LOG_BG = "#0a0820"
+GRADIENT_STOPS = [(124, 77, 255), (44, 140, 255), (28, 214, 180)]
+
+FONT = ("Segoe UI", 10)
+FONT_BOLD = ("Segoe UI", 10, "bold")
+FONT_TITLE = ("Segoe UI", 16, "bold")
+FONT_MONO = ("Consolas", 9)
+
+
+def _lerp(a, b, t):
+    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+
+def gradient_image(width: int, height: int, stops=None) -> Image.Image:
+    """Horizontal multi-stop gradient. Built as a 1-pixel-high strip and scaled
+    up, which is very fast even on a slow CPU."""
+    stops = stops or GRADIENT_STOPS
+    width, height = max(2, int(width)), max(2, int(height))
+    strip = Image.new("RGB", (width, 1))
+    px = strip.load()
+    seg = len(stops) - 1
+    for x in range(width):
+        t = x / (width - 1) * seg
+        i = min(int(t), seg - 1)
+        px[x, 0] = _lerp(stops[i], stops[i + 1], t - i)
+    return strip.resize((width, height))
 
 
 def apply_theme(root: tk.Tk) -> None:
-    """Apply the dark/teal/purple theme across every ttk widget in the app."""
     root.configure(bg=BG)
-
-    style = ttk.Style(root)
-    style.theme_use("clam")
-
-    style.configure(".", background=BG, foreground=TEXT, font=("Segoe UI", 10))
-    style.configure("TFrame", background=BG)
-    style.configure("TLabel", background=BG, foreground=TEXT)
-    style.configure("TLabelframe", background=BG, foreground=TEXT, bordercolor=PANEL_BORDER)
-    style.configure("TLabelframe.Label", background=BG, foreground=ACCENT, font=("Segoe UI", 10, "bold"))
-
-    style.configure("TNotebook", background=BG, bordercolor=PANEL_BORDER, tabmargins=(4, 4, 4, 0))
-    style.configure("TNotebook.Tab", background=PANEL, foreground=TEXT_MUTED,
-                     padding=(14, 8), borderwidth=0)
-    style.map("TNotebook.Tab",
-              background=[("selected", ACCENT)],
-              foreground=[("selected", ON_ACCENT)])
-
-    style.configure("TButton", background=PANEL, foreground=TEXT, bordercolor=PANEL_BORDER,
-                     focuscolor=PANEL, padding=7)
-    style.map("TButton", background=[("active", PANEL_BORDER)])
-
-    # Use style="Accent.TButton" for the one primary action in a given panel
-    style.configure("Accent.TButton", background=ACCENT, foreground=ON_ACCENT,
-                     bordercolor=ACCENT, focuscolor=ACCENT, padding=7, font=("Segoe UI", 10, "bold"))
-    style.map("Accent.TButton", background=[("active", ACCENT_DIM)])
-
-    style.configure("TEntry", fieldbackground=PANEL, foreground=TEXT,
-                     bordercolor=PANEL_BORDER, insertcolor=TEXT)
-    style.map("TEntry", fieldbackground=[("readonly", PANEL)])
-
-    style.configure("TCombobox", fieldbackground=PANEL, foreground=TEXT,
-                     background=PANEL, bordercolor=PANEL_BORDER, arrowcolor=TEXT)
-    style.map("TCombobox", fieldbackground=[("readonly", PANEL)])
+    s = ttk.Style(root)
+    try:
+        s.theme_use("clam")
+    except tk.TclError:
+        pass
+    s.configure(".", background=BG, foreground=TEXT, fieldbackground=PANEL, font=FONT,
+                bordercolor=PANEL_BORDER, lightcolor=PANEL_BORDER, darkcolor=PANEL_BORDER, troughcolor=PANEL)
+    s.configure("TFrame", background=BG)
+    s.configure("Panel.TFrame", background=PANEL)
+    s.configure("TLabel", background=BG, foreground=TEXT)
+    s.configure("Muted.TLabel", foreground=TEXT_MUTED)
+    s.configure("Heading.TLabel", font=FONT_BOLD, foreground=TEXT)
+    s.configure("Ok.TLabel", foreground=OK)
+    s.configure("Warn.TLabel", foreground=WARN)
+    s.configure("TLabelframe", background=BG, bordercolor=PANEL_BORDER, relief="solid")
+    s.configure("TLabelframe.Label", background=BG, foreground=ACCENT, font=FONT_BOLD)
+    s.configure("TButton", background=PANEL_ALT, foreground=TEXT, padding=(12, 6), borderwidth=1, focuscolor=PANEL_ALT)
+    s.map("TButton", background=[("active", PANEL_BORDER), ("pressed", ACCENT_2)])
+    s.configure("Accent.TButton", background=ACCENT, foreground=ON_ACCENT, font=FONT_BOLD, padding=(14, 7))
+    s.map("Accent.TButton", background=[("active", "#4be3cc"), ("pressed", ACCENT_DARK)])
+    s.configure("Danger.TButton", background="#7a2a3a", foreground=TEXT)
+    s.map("Danger.TButton", background=[("active", DANGER)])
+    s.configure("Nav.TButton", background=BG, foreground=TEXT, anchor="w", padding=(12, 9), borderwidth=0, font=FONT)
+    s.map("Nav.TButton", background=[("active", PANEL_ALT)])
+    s.configure("NavSel.TButton", background=PANEL_ALT, foreground="#ffffff", anchor="w", padding=(12, 9),
+                borderwidth=0, font=FONT_BOLD)
+    s.map("NavSel.TButton", background=[("active", PANEL_ALT)])
+    s.configure("TEntry", fieldbackground=PANEL, foreground=TEXT, insertcolor=TEXT, padding=5)
+    s.configure("TCombobox", fieldbackground=PANEL, foreground=TEXT, arrowcolor=ACCENT, padding=4)
+    s.map("TCombobox", fieldbackground=[("readonly", PANEL)])
+    s.configure("TCheckbutton", background=BG, foreground=TEXT)
+    s.map("TCheckbutton", background=[("active", BG)])
+    s.configure("TRadiobutton", background=BG, foreground=TEXT)
+    s.configure("Horizontal.TProgressbar", background=ACCENT, troughcolor=PANEL)
+    s.configure("Vertical.TScrollbar", background=PANEL_ALT, troughcolor=BG, arrowcolor=ACCENT)
+    root.option_add("*TCombobox*Listbox.background", PANEL)
+    root.option_add("*TCombobox*Listbox.foreground", TEXT)
+    root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+    root.option_add("*TCombobox*Listbox.selectForeground", ON_ACCENT)
 
 
 def style_log_widget(widget) -> None:
-    """Apply matching dark colors to a plain Tk widget (e.g. ScrolledText)
-    that isn't covered by ttk styling."""
-    widget.configure(bg=PANEL, fg=TEXT, insertbackground=TEXT,
-                      selectbackground=ACCENT_DIM, relief="flat", borderwidth=0)
+    widget.configure(bg=LOG_BG, fg="#cfd8ff", insertbackground=TEXT, font=FONT_MONO, relief="flat",
+                     highlightthickness=1, highlightbackground=PANEL_BORDER, selectbackground=ACCENT_2)
+    widget.tag_configure("warning", foreground=WARN)
+    widget.tag_configure("error", foreground=DANGER)
+    widget.tag_configure("critical", foreground="#ff3b6b", font=(FONT_MONO[0], FONT_MONO[1], "bold"))
 
 
-def make_gradient_header(parent: tk.Widget, title: str, subtitle: str = "", height: int = 64) -> tk.Canvas:
-    """
-    Create a horizontal gradient banner (purple -> teal) with a title,
-    already packed at the top of `parent`. Redraws itself whenever the
-    window is resized so the gradient always fills the width.
-    """
-    canvas = tk.Canvas(parent, height=height, highlightthickness=0, bg=BG)
-    canvas.pack(fill="x", side="top")
+class GradientHeader:
+    """Canvas with the gradient, the logo, the title and subtitle. The gradient
+    image is rebuilt only after the window stops resizing (debounced)."""
 
-    start_rgb = tuple(int(ACCENT2[i:i + 2], 16) for i in (1, 3, 5))
-    end_rgb = tuple(int(ACCENT[i:i + 2], 16) for i in (1, 3, 5))
+    def __init__(self, parent, title, subtitle="", logo_image=None, height=72):
+        self.canvas = tk.Canvas(parent, height=height, highlightthickness=0, bd=0, bg=BG)
+        self.height = height
+        self._photo = None
+        self._logo = logo_image
+        self._title, self._subtitle = title, subtitle
+        self._after = None
+        self.canvas.bind("<Configure>", self._schedule)
 
-    def redraw(event=None):
-        canvas.delete("all")
-        width = canvas.winfo_width()
-        if width < 2:
-            width = 560
-        for i in range(width):
-            t = i / width
-            r = int(start_rgb[0] + (end_rgb[0] - start_rgb[0]) * t)
-            g = int(start_rgb[1] + (end_rgb[1] - start_rgb[1]) * t)
-            b = int(start_rgb[2] + (end_rgb[2] - start_rgb[2]) * t)
-            canvas.create_line(i, 0, i, height, fill="#%02x%02x%02x" % (r, g, b))
-        text_y = height * 0.38 if subtitle else height / 2
-        canvas.create_text(18, text_y, anchor="w", text=title,
-                            fill="#ffffff", font=("Segoe UI", 15, "bold"))
-        if subtitle:
-            canvas.create_text(18, height * 0.74, anchor="w", text=subtitle,
-                                fill="#e7f7f4", font=("Segoe UI", 8))
+    def pack(self, **kw):
+        self.canvas.pack(**kw)
 
-    canvas.bind("<Configure>", redraw)
-    canvas.after(10, redraw)  # initial draw once the widget has a real size
-    return canvas
+    def _schedule(self, _event=None):
+        if self._after:
+            self.canvas.after_cancel(self._after)
+        self._after = self.canvas.after(60, self._draw)
+
+    def _draw(self):
+        self._after = None
+        w = max(self.canvas.winfo_width(), 10)
+        self._photo = ImageTk.PhotoImage(gradient_image(w, self.height))
+        c = self.canvas
+        c.delete("all")
+        c.create_image(0, 0, image=self._photo, anchor="nw")
+        x = 16
+        if self._logo is not None:
+            c.create_image(14, self.height // 2, image=self._logo, anchor="w")
+            x = 14 + self._logo.width() + 12
+        c.create_text(x, self.height // 2 - (10 if self._subtitle else 0), text=self._title,
+                      fill="white", font=FONT_TITLE, anchor="w")
+        if self._subtitle:
+            c.create_text(x, self.height // 2 + 14, text=self._subtitle, fill="#e8eaff", font=FONT, anchor="w")

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Control Panel - {{ app_name }}{% endblock %}
+{% block h1 %}Control Panel{% endblock %}
+{% block subtitle %}Web mode &mdash; this page works from any device on your Wi-Fi{% endblock %}
+{% block main %}
+  <section class="panel">
+    <h2><span class="chip c-green">{{ icon('power') }}</span> Status</h2>
+    <div id="status-line" class="status-line">Loading&hellip;</div>
+    <div class="qr-row">
+      <div class="qr-box"><div class="qr-title">Same Wi-Fi</div><img id="lan-qr" alt="" width="260" height="260"><a id="lan-url" class="mono small"></a></div>
+      <div class="qr-box" id="pub-box" hidden><div class="qr-title" id="pub-title">Public link</div><img id="pub-qr" alt="" width="260" height="260"><a id="pub-url" class="mono small"></a></div>
+    </div>
+    <p id="pub-msg" class="dropzone-hint"></p>
+    <div class="row-actions">
+      <button class="text-btn" id="clear-hist-btn" type="button">Clear history lists</button>
+      <button class="text-btn danger" id="quit-btn" type="button">Quit the tool</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2><span class="chip c-orange">{{ icon('upload') }}</span> Send to phone</h2>
+    <div id="admin-drop" class="dropzone"><p class="dropzone-label">Tap to choose files to offer to the phone</p>
+      <input type="file" id="admin-file" multiple hidden></div>
+    <ul id="admin-upl" class="upload-list"></ul>
+    <textarea id="admin-text" class="text-input" rows="3" dir="auto" placeholder="Text to send to the phone..."></textarea>
+    <div class="text-send-row"><button id="admin-send-text" class="icon-btn" type="button">Send text</button><span id="admin-text-status" class="file-meta"></span></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-header-row"><h2><span class="chip c-violet">{{ icon('inbox') }}</span> Everything shared (saved on the laptop)</h2>
+    <button class="text-btn" id="hist-refresh" type="button">Refresh</button></div>
+    <ul id="hist-list" class="file-list"><li class="empty-state">Loading&hellip;</li></ul>
+  </section>
+
+  <section class="panel">
+    <h2><span class="chip c-blue">{{ icon('terminal') }}</span> Live log</h2>
+    <pre id="log-box" class="logbox"></pre>
+  </section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='admin.js') }}"></script>{% endblock %}

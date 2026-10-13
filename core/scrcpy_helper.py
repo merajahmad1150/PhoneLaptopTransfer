@@ -1,92 +1,114 @@
 """
 core/scrcpy_helper.py
-"See and control your phone from the laptop with the mouse" (mirror the
-screen, open apps, drag files onto it, move/delete things with clicks)
-is exactly what scrcpy already does - it's a free, open-source,
-actively-maintained tool built for this over ADB. Rebuilding video
-capture + H.264 decode + touch-injection from scratch would be a huge,
-fragile undertaking to get right in one pass, so this app launches the
-real tool instead of reinventing it.
-
-scrcpy is a separate download (not bundled - it's a few MB per platform
-and updates independently). See SETUP_GUIDE.md for where to get it.
-
-What you get for free just by launching scrcpy, no extra code needed:
-  - Full mouse control of the phone as if it were a touchscreen (open
-    apps, tap, swipe, long-press)
-  - Drag-and-drop a file (or an .apk) straight onto the scrcpy window to
-    push it to the phone
-  - Clipboard sync between PC and phone (Ctrl+C/Ctrl+V works across both)
-So "copy a folder / move something / delete something" on the phone is
-done by mirroring, then using a file manager app ON the phone through the
-mirror - not a separate feature we build here.
+Screen mirroring + mouse control of an ANDROID phone through scrcpy (free,
+open-source), over USB or wireless ADB. Also an optional launcher for an
+AirPlay receiver (UxPlay) so an iPhone can mirror to the laptop on the same
+Wi-Fi. Mirror processes are tracked: their output is drained into the log
+(the old version never read it, which could eventually freeze scrcpy) and
+they are closed when the tool exits.
 """
 
+import os
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
 from logger import get_logger
 
 log = get_logger()
+_procs = []
+_procs_lock = threading.Lock()
+
+
+def _exists(path: str) -> bool:
+    return bool(path) and (Path(path).is_file() or shutil.which(path) is not None)
 
 
 def is_installed(scrcpy_path: str) -> bool:
-    """scrcpy_path may be a bare command (checked via PATH) or a full path
-    to scrcpy.exe."""
-    if Path(scrcpy_path).is_file():
-        return True
-    return shutil.which(scrcpy_path) is not None
+    return _exists(scrcpy_path)
 
 
-def build_args(scrcpy_path: str, cfg: dict) -> list:
-    """Build the scrcpy command line from the app's performance settings."""
+def build_args(scrcpy_path: str, cfg: dict, serial: str = None) -> list:
     args = [scrcpy_path]
-    max_size = cfg.get("scrcpy_max_size")
-    if max_size:
-        args += ["--max-size", str(int(max_size))]
-    bitrate = cfg.get("scrcpy_bitrate_mbps")
-    if bitrate:
-        args += ["--video-bit-rate", f"{int(bitrate)}M"]
-    max_fps = cfg.get("scrcpy_max_fps")
-    if max_fps:
-        args += ["--max-fps", str(int(max_fps))]
+    if serial:
+        args += ["-s", serial]
+    if cfg.get("scrcpy_max_size"):
+        args += ["--max-size", str(int(cfg["scrcpy_max_size"]))]
+    if cfg.get("scrcpy_bitrate_mbps"):
+        args += ["--video-bit-rate", f"{int(cfg['scrcpy_bitrate_mbps'])}M"]
+    if cfg.get("scrcpy_max_fps"):
+        args += ["--max-fps", str(int(cfg["scrcpy_max_fps"]))]
     if cfg.get("scrcpy_turn_screen_off"):
         args += ["--turn-screen-off"]
     return args
 
 
-def launch(scrcpy_path: str, cfg: dict) -> tuple:
-    """
-    Start scrcpy as its own window (non-blocking - it runs until the user
-    closes it). Returns (ok, message). Since scrcpy can fail immediately
-    if no device is connected/authorized, we briefly check whether the
-    process is still alive a moment after starting so that failure shows
-    up as a message instead of a window that silently never appears.
-    """
+def _drain(proc, tag: str):
+    try:
+        for line in proc.stdout:
+            line = line.rstrip()
+            if line:
+                log.debug("%s: %s", tag, line[:300])
+    except Exception:
+        log.debug("%s output reader ended", tag, exc_info=True)
+
+
+def _spawn(args: list, tag: str, env=None, wait_check: float = 1.5):
+    """Start a GUI helper process, drain its output into the log, and report
+    an immediate failure as a message. Returns (ok, message)."""
+    log.info("Launching %s: %s", tag, " ".join(args))
+    try:
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                encoding="utf-8", errors="replace", env=env)
+    except OSError as exc:
+        log.error("Failed to launch %s: %s", tag, exc, exc_info=True)
+        return False, f"Could not start {tag}: {exc}"
+    threading.Thread(target=_drain, args=(proc, tag), name=f"{tag}-output", daemon=True).start()
+    time.sleep(wait_check)
+    if proc.poll() is not None:
+        log.error("%s exited immediately (code %s)", tag, proc.returncode)
+        return False, (f"{tag} closed right away (exit code {proc.returncode}). "
+                       f"Check the phone is connected/authorised - details are in the log.")
+    with _procs_lock:
+        _procs.append((tag, proc))
+    log.info("%s is running (pid %s)", tag, proc.pid)
+    return True, f"{tag} started."
+
+
+def launch(scrcpy_path: str, cfg: dict, serial: str = None) -> tuple:
     if not is_installed(scrcpy_path):
         msg = f"'{scrcpy_path}' not found. Install scrcpy and set its path in Settings (see SETUP_GUIDE.md)."
         log.warning(msg)
         return False, msg
+    env = dict(os.environ)
+    adb = cfg.get("adb_path", "adb")
+    if adb and adb != "adb" and Path(adb).is_file():
+        env["ADB"] = adb     # make scrcpy use the SAME adb as this tool (avoids version-mismatch restarts)
+    return _spawn(build_args(scrcpy_path, cfg, serial), "scrcpy", env=env)
 
-    args = build_args(scrcpy_path, cfg)
-    log.info("Launching scrcpy: %s", " ".join(args))
-    try:
-        # scrcpy opens its OWN window (that's the point), so we don't
-        # suppress window creation the way we do for headless CLI tools.
-        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    except OSError as exc:
-        log.error("Failed to launch scrcpy: %s", exc, exc_info=True)
-        return False, str(exc)
 
-    time.sleep(1.5)  # give it a moment to fail fast if no device is attached
-    if proc.poll() is not None:
-        # Process already exited - almost certainly an error (no device,
-        # unauthorized, etc). Grab whatever it printed to explain why.
-        output = proc.stdout.read() if proc.stdout else ""
-        log.error("scrcpy exited immediately (code %s): %s", proc.returncode, output)
-        return False, output.strip() or f"scrcpy exited immediately (code {proc.returncode})"
+def launch_airplay(uxplay_path: str) -> tuple:
+    """Optional: start an AirPlay mirroring receiver for iPhone/iPad (same Wi-Fi)."""
+    if not _exists(uxplay_path):
+        return False, ("UxPlay (the AirPlay receiver) isn't set up. Put uxplay.exe somewhere and set "
+                       "'uxplay_path' in config.json - see SETUP_GUIDE.md.")
+    return _spawn([uxplay_path, "-n", "Laptop (PLT)"], "uxplay", wait_check=2.5)
 
-    log.info("scrcpy window launched (pid %s)", proc.pid)
-    return True, "scrcpy launched"
+
+def stop_all() -> None:
+    with _procs_lock:
+        items = list(_procs)
+        _procs.clear()
+    for tag, proc in items:
+        if proc.poll() is None:
+            log.info("Closing %s (pid %s)", tag, proc.pid)
+            try:
+                proc.terminate()
+                proc.wait(timeout=4)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass

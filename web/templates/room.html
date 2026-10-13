@@ -1,78 +1,42 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Room {{ code }} - Laptop Transfer</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-  <header class="topbar">
-    <h1>Shared Room {{ code }}</h1>
-    <p class="subtitle">Anything added here is visible to anyone with this room's link - not the owner's own files</p>
-  </header>
-
-  <main>
-    {% if via_tunnel and lan_url %}
-    <div class="tip-banner" id="lan-tip-banner">
-      <span>You're connecting over the internet right now. If both devices are
-      on the same Wi-Fi as the laptop, use <a href="{{ lan_url }}">{{ lan_url }}</a>
-      instead &mdash; it stays on your local network and won't use mobile data.</span>
-      <button type="button" id="dismiss-tip-btn" aria-label="Dismiss">&times;</button>
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Room {{ code }} - {{ app_name }}{% endblock %}
+{% block h1 %}Shared Room {{ code }}{% endblock %}
+{% block subtitle %}Visible to anyone with this room's link &mdash; not the owner's personal files{% endblock %}
+{% block main %}
+  {% if via_tunnel and lan_url %}
+  <div class="tip-banner" id="lan-tip-banner">
+    <span>You're connected over the internet. If both devices are on the same Wi-Fi as the laptop, use
+    <a href="{{ lan_url }}">{{ lan_url }}</a> instead.</span>
+    <button type="button" id="dismiss-tip-btn" aria-label="Dismiss">&times;</button>
+  </div>
+  {% endif %}
+  <section class="panel" id="join-panel">
+    <h2><span class="chip c-blue">{{ icon('users') }}</span> Pair your other device</h2>
+    <p class="dropzone-hint">Scan this with your phone (or open the link there) to join the same room:</p>
+    <img class="room-qr" src="{{ qr_data_uri }}" alt="QR code for this room" width="320" height="320">
+    <div class="text-send-row">
+      <input type="text" id="room-link" class="text-input" style="flex:1;" readonly value="{{ room_url }}">
+      <button id="copy-link-btn" class="icon-btn" type="button">Copy Link</button>
     </div>
-    {% endif %}
-    <section class="panel" id="join-panel">
-      <h2>Pair your other device</h2>
-      <p class="dropzone-hint">Scan this with your phone (or open the link there) to join the same room:</p>
-      <img class="room-qr" src="{{ qr_data_uri }}" alt="QR code for this room" width="220" height="220">
-      <div class="text-send-row">
-        <input type="text" id="room-link" class="text-input" style="flex:1;" readonly value="{{ room_url }}">
-        <button id="copy-link-btn" class="icon-btn" type="button">Copy Link</button>
-      </div>
-    </section>
-
-    <section class="panel" id="drop-panel">
-      <h2>Add to this room</h2>
-      <div id="dropzone" class="dropzone">
-        <p class="dropzone-label">Tap to choose files, or drag them here</p>
-        <p class="dropzone-hint">Any file type &middot; multiple at once &middot; folders too</p>
-        <input type="file" id="file-input" multiple hidden>
-      </div>
-      <button id="folder-picker-btn" class="text-btn" type="button">or choose a whole folder</button>
-      <input type="file" id="folder-input" webkitdirectory hidden>
-      <ul id="upload-list" class="upload-list"></ul>
-
-      <div class="divider"></div>
-      <h2>Add text to this room</h2>
-      <textarea id="text-input" class="text-input" rows="4"
-                placeholder="Type or paste any length of text..."></textarea>
-      <div class="text-send-row">
-        <button id="send-text-btn" class="icon-btn" type="button">Add to Room</button>
-        <span id="send-text-status" class="file-meta"></span>
-      </div>
-    </section>
-
-    <section class="panel" id="files-panel">
-      <div class="panel-header-row">
-        <h2>Files in this room</h2>
-        <button id="refresh-btn" class="text-btn" type="button">Refresh</button>
-      </div>
-      <ul id="file-list" class="file-list">
-        <li class="empty-state">Loading&hellip;</li>
-      </ul>
-
-      <div class="divider"></div>
-      <div class="panel-header-row">
-        <h2>Text in this room</h2>
-        <button id="text-refresh-btn" class="text-btn" type="button">Refresh</button>
-      </div>
-      <ul id="room-text-list" class="file-list">
-        <li class="empty-state">Nothing yet</li>
-      </ul>
-    </section>
-  </main>
-
-  <script>window.ROOM_CODE = {{ code|tojson }};</script>
-  <script src="{{ url_for('static', filename='room.js') }}"></script>
-</body>
-</html>
+  </section>
+  {% set send_title = 'Add to this room' %}{% set text_send_title = 'Add text to this room' %}
+  {% set text_send_button = 'Add to Room' %}{% set get_title = 'Files in this room' %}
+  {% set text_get_title = 'Text in this room' %}
+  {% include "_transfer_panels.html" %}
+{% endblock %}
+{% block scripts %}
+<script>window.PLT = {
+  uploadUrl: "/room/{{ code }}/upload-raw", reportUrl: null, filesUrl: "/room/{{ code }}/files",
+  downloadBase: "/room/{{ code }}/download/", textPostUrl: "/room/{{ code }}/text",
+  textsUrl: "/room/{{ code }}/texts", parallel: {{ parallel_uploads }}, visibleHours: 0, copiedNote: false
+};</script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+<script>
+document.getElementById("copy-link-btn").addEventListener("click", function () {
+  var f = document.getElementById("room-link"); f.select();
+  try { navigator.clipboard.writeText(f.value); } catch (e) { document.execCommand("copy"); }
+  this.textContent = "Copied!"; var b = this; setTimeout(function () { b.textContent = "Copy Link"; }, 1500);
+});
+</script>
+{% endblock %}

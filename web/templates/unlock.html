@@ -1,32 +1,14 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Enter PIN - Laptop Transfer</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-  <header class="topbar">
-    <h1>Laptop Transfer</h1>
-    <p class="subtitle">This laptop has PIN protection enabled</p>
-  </header>
-
-  <main>
-    <section class="panel">
-      <h2>Enter PIN to continue</h2>
-      <form method="POST" action="{{ request.full_path }}">
-        <input type="text" inputmode="numeric" autocomplete="off" name="pin"
-               class="text-input" style="text-align:center; font-size:1.4rem; letter-spacing:0.3em;"
-               placeholder="------" autofocus>
-        <div class="text-send-row">
-          <button type="submit" class="icon-btn">Unlock</button>
-        </div>
-      </form>
-      {% if error %}
-      <p style="color: var(--danger); margin-top: 0.8rem;">{{ error }}</p>
-      {% endif %}
-    </section>
-  </main>
-</body>
-</html>
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Enter PIN - {{ app_name }}{% endblock %}
+{% block subtitle %}This laptop has PIN protection turned on{% endblock %}
+{% block main %}
+  <section class="panel">
+    <h2><span class="chip c-green">{{ icon('shield') }}</span> Enter PIN to continue</h2>
+    <form method="POST" action="{{ request.full_path }}">
+      <input type="text" inputmode="numeric" autocomplete="off" name="pin" class="text-input pin-input" placeholder="------" autofocus>
+      <div class="text-send-row"><button type="submit" class="icon-btn">Unlock</button></div>
+    </form>
+    {% if error %}<p class="err">{{ error }}</p>{% endif %}
+  </section>
+{% endblock %}
