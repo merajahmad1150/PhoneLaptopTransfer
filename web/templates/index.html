@@ -18,7 +18,8 @@
 {% block scripts %}
 <script>window.PLT = {
   uploadUrl: "/upload-raw", reportUrl: "/upload-report", filesUrl: "/files", downloadBase: "/download/",
-  textPostUrl: "/text/to-laptop", textsUrl: "/text/to-phone", parallel: {{ parallel_uploads }},
+  textPostUrl: "/text/to-laptop", textsUrl: "/text/to-phone",
+  filesClearUrl: "/files/clear", textsClearUrl: "/text/clear", parallel: {{ parallel_uploads }},
   visibleHours: {{ visible_hours }}, copiedNote: true
 };</script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>

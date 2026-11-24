@@ -28,14 +28,16 @@
 <section class="panel" id="files-panel">
   <div class="panel-header-row">
     <h2><span class="chip c-teal">{{ icon('download') }}</span> {{ get_title }}</h2>
-    <button id="refresh-btn" class="text-btn" type="button">Refresh</button>
+    <span class="head-actions"><button id="refresh-btn" class="text-btn" type="button">Refresh</button>
+    <button id="files-clear-btn" class="text-btn danger" type="button" hidden>Clear list</button></span>
   </div>
   <ul id="file-list" class="file-list"><li class="empty-state">Loading&hellip;</li></ul>
 
   <div class="divider"></div>
   <div class="panel-header-row">
     <h2><span class="chip c-violet">{{ icon('inbox') }}</span> {{ text_get_title }}</h2>
-    <button id="text-refresh-btn" class="text-btn" type="button">Refresh</button>
+    <span class="head-actions"><button id="text-refresh-btn" class="text-btn" type="button">Refresh</button>
+    <button id="text-clear-btn" class="text-btn danger" type="button" hidden>Clear</button></span>
   </div>
   <ul id="text-list" class="file-list"><li class="empty-state">Nothing yet</li></ul>
   {% if visible_hours and visible_hours > 0 %}

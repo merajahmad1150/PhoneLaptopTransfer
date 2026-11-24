@@ -21,6 +21,11 @@
     if (s < 60) return "just now"; if (s < 3600) return Math.floor(s / 60) + " min ago";
     if (s < 86400) return Math.floor(s / 3600) + " h ago"; return Math.floor(s / 86400) + " d ago";
   }
+  function fmtDT(ts) {   // exact date + time, in the phone's own time zone
+    try {
+      return new Date(ts * 1000).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    } catch (e) { return new Date(ts * 1000).toString(); }
+  }
   function gotoUnlock() { location.href = "/unlock?next=" + encodeURIComponent(location.pathname); }
   function encodePath(p) { return p.split("/").map(encodeURIComponent).join("/"); }
 
@@ -109,7 +114,7 @@
     };
     function fail(msg, retry) {
       if (retry && job.tries <= 3) { job.meta.textContent = "Retrying (" + job.tries + ")\u2026"; setTimeout(function () { active--; queue.unshift(job); pump(); }, 1200 * job.tries); return; }
-      job.row.className = "upload-row status-error"; job.meta.textContent = "Failed: " + msg; batch.failed++; active--; pump();
+      job.row.className = "upload-row status-error"; job.meta.textContent = "Failed " + fmtDT(Date.now() / 1000) + ": " + msg; batch.failed++; active--; pump();
     }
     xhr.onload = function () {
       var data = null; try { data = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
@@ -117,7 +122,7 @@
       if (xhr.status >= 200 && xhr.status < 300 && data && data.ok) {
         var secs = (performance.now() - t0) / 1000;
         job.row.className = "upload-row status-done";
-        job.meta.textContent = "Sent \u00b7 " + fmtBytes(job.file.size) + (secs > 0.3 ? " \u00b7 " + fmtBytes(job.file.size / secs) + "/s" : "");
+        job.meta.textContent = "Sent " + fmtDT(Date.now() / 1000) + " \u00b7 " + fmtBytes(job.file.size) + (secs > 0.3 ? " \u00b7 " + fmtBytes(job.file.size / secs) + "/s" : "");
         job.bar.style.width = "100%"; batch.ok++; batch.bytes += job.file.size; active--; clearDoneBtn.hidden = false;
         refreshFiles(true); pump();
       } else {
@@ -162,7 +167,7 @@
     var nodes = files.map(function (f) {
       var li = el("li", "file-row"), info = el("div", "file-info"), n = el("span", "file-name", f.name);
       n.setAttribute("dir", "auto");
-      info.appendChild(n); info.appendChild(el("span", "file-meta", fmtBytes(f.size) + " \u00b7 " + ago(f.added)));
+      info.appendChild(n); info.appendChild(el("span", "file-meta", fmtBytes(f.size) + " \u00b7 sent " + fmtDT(f.added) + " (" + ago(f.added) + ")"));
       var a = el("a", "icon-btn", "Get"); a.href = CFG.downloadBase + encodePath(f.name); a.setAttribute("download", "");
       li.appendChild(info); li.appendChild(a); return li;
     });
@@ -180,7 +185,7 @@
       .then(function (r) { if (r.status === 401) { gotoUnlock(); throw new Error("PIN required"); } return r.json(); })
       .then(function (d) {
         if (!d.ok) throw new Error(d.error || "Unknown error");
-        sendStatus.textContent = "Sent (" + text.length + " chars)" + (CFG.copiedNote ? (d.copied ? " \u00b7 copied to laptop clipboard" : "") : "");
+        sendStatus.textContent = "Sent " + fmtDT(Date.now() / 1000) + " (" + text.length + " chars)" + (CFG.copiedNote ? (d.copied ? " \u00b7 copied to laptop clipboard" : "") : "");
         textInput.value = ""; if (!CFG.copiedNote) refreshTexts();
       }).catch(function (e) { sendStatus.textContent = "Failed: " + e.message; });
   });
@@ -202,6 +207,9 @@
     if (seenTextIds[t.id]) return; seenTextIds[t.id] = true; lastTextId = Math.max(lastTextId, t.id);
     var empty = textList.querySelector(".empty-state"); if (empty) empty.remove();
     var li = el("li", "text-row"), body = el("div", "text-body", t.text); body.setAttribute("dir", "auto");
+    li.dataset.id = String(t.id);
+    var head = el("div", "text-head"); head.appendChild(el("span", "text-time", "From laptop \u00b7 " + (t.ts ? fmtDT(t.ts) : "")));
+    li.appendChild(head);
     var actions = el("div", "text-actions"), copy = el("button", "icon-btn", "Copy"), save = el("button", "icon-btn", "Save");
     copy.type = save.type = "button";
     copy.addEventListener("click", function () { copyText(t.text).then(function (m) { copy.textContent = m === "prompt" ? "See popup" : "Copied!"; setTimeout(function () { copy.textContent = "Copy"; }, 1500); }); });
@@ -216,9 +224,29 @@
   function refreshTexts() {
     fetch(CFG.textsUrl + "?since=" + lastTextId, { headers: { "X-Requested-With": "XMLHttpRequest" } })
       .then(function (r) { if (r.status === 401) { gotoUnlock(); throw new Error("PIN required"); } return r.json(); })
-      .then(function (d) { if (d.ok) d.texts.forEach(addText); }).catch(function () {});
+      .then(function (d) {
+        if (!d.ok) return;
+        if (d.cleared_upto) dropClearedTexts(d.cleared_upto);
+        d.texts.forEach(addText);
+      }).catch(function () {});
   }
   $("text-refresh-btn").addEventListener("click", refreshTexts);
+
+  function dropClearedTexts(upto) {   // the list was cleared on the laptop or on another phone
+    Array.prototype.slice.call(textList.querySelectorAll(".text-row")).forEach(function (r) { if (Number(r.dataset.id) <= upto) r.remove(); });
+    if (!textList.querySelector(".text-row") && !textList.querySelector(".empty-state")) textList.appendChild(el("li", "empty-state", "Nothing yet"));
+  }
+  function postClear(url, what, done) {
+    if (!url || !window.confirm("Clear the " + what + " list on this page?\nEverything stays saved on the laptop.")) return;
+    fetch(url, { method: "POST", headers: { "X-Requested-With": "XMLHttpRequest" } })
+      .then(function (r) { if (r.status === 401) { gotoUnlock(); throw new Error("PIN required"); } return r.json(); })
+      .then(function (d) { if (d.ok) done(); }).catch(function (e) { window.alert("Could not clear: " + e.message); });
+  }
+  var tClear = $("text-clear-btn"), fClear = $("files-clear-btn");
+  if (CFG.textsClearUrl && tClear) { tClear.hidden = false; tClear.addEventListener("click", function () {
+    postClear(CFG.textsClearUrl, "text", function () { textList.replaceChildren(el("li", "empty-state", "Nothing yet")); refreshTexts(); }); }); }
+  if (CFG.filesClearUrl && fClear) { fClear.hidden = false; fClear.addEventListener("click", function () {
+    postClear(CFG.filesClearUrl, "file", function () { renderFiles([]); }); }); }
 
   /* --------------- keep the page tidy: hide old rows, light auto-refresh --------------- */
   setInterval(function () {

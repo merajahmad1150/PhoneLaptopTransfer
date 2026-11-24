@@ -11,8 +11,9 @@ from tkinter import filedialog, messagebox, ttk
 import adb_helper
 import syncthing_helper
 import theme
+from tooltip import add_tooltip
 import ui_helpers
-from config import BASE_DIR
+from config import BASE_DIR, data_dir, shelf_dir
 from logger import get_logger
 
 log = get_logger()
@@ -33,7 +34,7 @@ class ToolsMixin:
         r.pack(fill="x", padx=12)
         ttk.Button(r, text="Check ADB", command=self._safe(self._check_adb)).pack(side="left")
         ttk.Button(r, text="List devices", command=self._safe(self._list_adb_devices)).pack(side="left", padx=6)
-        self.adb_status_var = tk.StringVar(value="Not checked yet")
+        self.adb_status_var = ui_helpers.StampedVar(value="Not checked yet")
         ttk.Label(r, textvariable=self.adb_status_var, style="Muted.TLabel", wraplength=380).pack(side="left", padx=10)
 
         push = ttk.LabelFrame(tab, text="Send file/folder to phone (push)")
@@ -129,7 +130,7 @@ class ToolsMixin:
         ttk.Button(r, text="Check if installed", command=self._safe(self._check_syncthing)).pack(side="left")
         ttk.Button(r, text="Launch Syncthing", style="Accent.TButton", command=self._safe(self._launch_syncthing)).pack(side="left", padx=6)
         ttk.Button(r, text="Open web UI", command=self._safe(lambda: syncthing_helper.open_web_ui(self.cfg["syncthing_web_ui"]))).pack(side="left")
-        self.sync_status_var = tk.StringVar(value="Not checked yet")
+        self.sync_status_var = ui_helpers.StampedVar(value="Not checked yet")
         ttk.Label(tab, textvariable=self.sync_status_var, style="Muted.TLabel").pack(anchor="w", padx=12, pady=(4, 10))
         ttk.Button(tab, text="Don't have Syncthing? Get it here", command=self._safe(syncthing_helper.open_download_page)).pack(anchor="w", padx=12)
 
@@ -193,6 +194,65 @@ class ToolsMixin:
         ttk.Label(mr, text="ask = show the choice every time,  gui = desktop window,  web = control panel in a browser",
                   style="Muted.TLabel").pack(side="left")
 
+        ac = ttk.Frame(o)
+        ac.pack(fill="x", padx=8, pady=(0, 8))
+        ttk.Label(ac, text="Auto-copy phone text to the clipboard from:").pack(side="left")
+        self.autocopy_scope_var = tk.StringVar(value=self.cfg.get("auto_copy_text_scope", "everywhere"))
+        scope_cb = ttk.Combobox(ac, textvariable=self.autocopy_scope_var, values=["everywhere", "wifi", "off"], state="readonly", width=11)
+        scope_cb.pack(side="left", padx=8)
+        ttk.Label(ac, text="everywhere = local Wi-Fi AND the public link (turn the access PIN on!)   wifi = local only",
+                  style="Muted.TLabel", wraplength=420, justify="left").pack(side="left")
+
+        # ---- Appearance (applies immediately) ----
+        ap = ttk.LabelFrame(tab, text="Appearance and layout  (applies immediately)")
+        ap.pack(fill="x", padx=12, pady=6)
+        self.show_log_var = tk.BooleanVar(value=bool(self.cfg.get("ui_show_log", True)))
+        ttk.Checkbutton(ap, text="Show the live log panel under the pages", variable=self.show_log_var,
+                        command=self._safe(self._apply_log_visibility)).pack(anchor="w", padx=8, pady=(8, 2))
+        gr = ttk.Frame(ap)
+        gr.pack(fill="x", padx=8, pady=3)
+        ttk.Label(gr, text="Header colours:").pack(side="left")
+        self.gradient_var = tk.StringVar(value=self.cfg.get("ui_gradient", "Aurora"))
+        gcb = ttk.Combobox(gr, textvariable=self.gradient_var, values=list(theme.GRADIENTS), state="readonly", width=12)
+        gcb.pack(side="left", padx=8)
+        gcb.bind("<<ComboboxSelected>>", self._safe(lambda e: self._apply_gradient()))
+        ttk.Label(gr, text="Text size:").pack(side="left", padx=(16, 0))
+        self.text_size_var = tk.StringVar(value=self.cfg.get("ui_text_size", "Normal"))
+        ttk.Combobox(gr, textvariable=self.text_size_var, values=["Small", "Normal", "Large"], state="readonly", width=8).pack(side="left", padx=8)
+        ttk.Label(gr, text="(text size applies after restart)", style="Muted.TLabel").pack(side="left")
+        ttk.Label(ap, text="Show these pages in the sidebar (untick to hide the ones you never use):").pack(anchor="w", padx=8, pady=(6, 0))
+        pg = ttk.Frame(ap)
+        pg.pack(fill="x", padx=8, pady=(2, 8))
+        self.page_vars = {}
+        for i, (key, label, _icon) in enumerate(self.PAGE_LIST):
+            if key == "settings":
+                continue                                    # Settings must stay reachable
+            v = tk.BooleanVar(value=key not in self.cfg.get("ui_hidden_pages", []))
+            self.page_vars[key] = v
+            ttk.Checkbutton(pg, text=label, variable=v, command=self._safe(self._apply_hidden_pages)).grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 14), pady=1)
+
+        # ---- Clip Shelf ----
+        sh = ttk.LabelFrame(tab, text="Clip Shelf  (small always-on-top window)")
+        sh.pack(fill="x", padx=12, pady=6)
+        self.shelf_enabled_var = tk.BooleanVar(value=bool(self.cfg.get("shelf_enabled", True)))
+        ttk.Checkbutton(sh, text="Open the Clip Shelf automatically with the tool", variable=self.shelf_enabled_var).pack(anchor="w", padx=8, pady=(8, 2))
+        hk = ttk.Frame(sh)
+        hk.pack(fill="x", padx=8, pady=3)
+        self.shelf_hk_vars = {}
+        for key, label in (("shelf_hotkey_toggle", "Show / hide hotkey:"), ("shelf_hotkey_add", "Save clipboard hotkey:")):
+            ttk.Label(hk, text=label).pack(side="left")
+            v = tk.StringVar(value=self.cfg.get(key, ""))
+            self.shelf_hk_vars[key] = v
+            en = ttk.Entry(hk, textvariable=v, width=14)
+            en.pack(side="left", padx=(6, 14))
+            wire_field(en)
+        sb = ttk.Frame(sh)
+        sb.pack(fill="x", padx=8, pady=(2, 8))
+        ttk.Button(sb, text="Show / hide the shelf now", command=self._safe(self._toggle_shelf)).pack(side="left")
+        ttk.Button(sb, text="Open shelf data folder", command=self._safe(lambda: self._open_path(shelf_dir()))).pack(side="left", padx=6)
+        ttk.Label(sh, text=f"Shelf list: {data_dir() / 'shelf.json'}    Kept files: {shelf_dir()}", style="Muted.TLabel",
+                  wraplength=640, justify="left").pack(anchor="w", padx=8, pady=(0, 8))
+
         b = ttk.Frame(tab)
         b.pack(fill="x", padx=12, pady=10)
         ttk.Button(b, text="Save settings", style="Accent.TButton", command=self._safe(self._save_settings)).pack(side="left")
@@ -233,7 +293,12 @@ class ToolsMixin:
         self.cfg.update(new)
         for key, var in self.set_bools.items():
             self.cfg[key] = bool(var.get())
-        self.cfg["startup_mode"] = self.startup_mode_var.get()
+        self.cfg["startup_mode"] = self.startup_mode_var.get() if self.startup_mode_var.get() in ("ask", "gui", "web") else "ask"
+        self.cfg["auto_copy_text_scope"] = self.autocopy_scope_var.get() if self.autocopy_scope_var.get() in ("everywhere", "wifi", "off") else "everywhere"
+        self.cfg["ui_text_size"] = self.text_size_var.get()
+        self.cfg["shelf_enabled"] = bool(self.shelf_enabled_var.get())
+        for key, var in self.shelf_hk_vars.items():
+            self.cfg[key] = var.get().strip()
         ui_helpers.set_right_click_pastes(self.cfg["right_click_pastes"])
         for k in ("download_folder", "share_folder", "text_folder"):
             Path(self.cfg[k]).mkdir(parents=True, exist_ok=True)

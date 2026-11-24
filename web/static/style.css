@@ -30,6 +30,9 @@ body.wide main { max-width: 900px; }
 .panel h2 { margin: 0 0 .8rem; font-size: 1rem; font-weight: 650; display: flex; align-items: center; gap: .55rem; }
 .panel-header-row { display: flex; justify-content: space-between; align-items: center; gap: .5rem; margin-bottom: .6rem; }
 .panel-header-row h2 { margin: 0; }
+.head-actions { display: flex; gap: .9rem; align-items: center; }
+.text-time, .file-time { font-size: .8rem; color: var(--muted); }
+.text-head { display: flex; justify-content: space-between; width: 100%; gap: .5rem; }
 .chip { display: inline-flex; width: 30px; height: 30px; border-radius: 9px; align-items: center; justify-content: center; color: #fff; flex-shrink: 0; }
 .chip .ico { width: 18px; height: 18px; }
 .c-orange { background: linear-gradient(135deg, #ffb020, #ff7a18); } .c-pink { background: linear-gradient(135deg, #ff5fa2, #c13fd6); }

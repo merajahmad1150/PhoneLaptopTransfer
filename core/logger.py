@@ -24,6 +24,7 @@ import faulthandler
 import logging
 import os
 import platform
+import re
 import shutil
 import sys
 import threading
@@ -60,6 +61,80 @@ def stat_add(key: str, amount=1) -> None:
 # ---------------------------------------------------------------------- #
 # Handlers / filters
 # ---------------------------------------------------------------------- #
+# ---------------------------------------------------------------------- #
+# Highlighting: important lines stand out, routine lines are dimmed
+# ---------------------------------------------------------------------- #
+_IMPORTANT = re.compile(
+    r"(Received|Sent |Sending|Finished|LIVE|Server started|SESSION|Statistics|copied to|STOPPED|Start-up choice|"
+    r"Window closing|Public access|Added to|Screenshot|Shelf|Pushed|Paired|Connected|Self-test|Memory)", re.I)
+
+
+def classify_line(line: str) -> str:
+    """'error' | 'warning' | 'important' | 'normal' | 'dim' for one formatted log line."""
+    if "[CRITICAL" in line or "[ERROR" in line:
+        return "error"
+    if "[WARNING" in line:
+        return "warning"
+    if "[DEBUG" in line or "line above repeated" in line:
+        return "dim"
+    if _IMPORTANT.search(line):
+        return "important"
+    return "normal"
+
+
+_ANSI = {"error": "\033[1;91m", "warning": "\033[93m", "important": "\033[1;96m", "dim": "\033[90m", "normal": ""}
+_vt_state = {"checked": False, "ok": False}
+
+
+def _enable_vt(stream) -> bool:
+    """Turn on ANSI colours in the Windows console (Windows 10/11 support it once enabled)."""
+    if _vt_state["checked"]:
+        return _vt_state["ok"]
+    _vt_state["checked"] = True
+    try:
+        if not stream or not stream.isatty():
+            return False
+        if sys.platform != "win32":
+            _vt_state["ok"] = True
+            return True
+        import ctypes
+        k = ctypes.windll.kernel32
+        handle = k.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if k.GetConsoleMode(handle, ctypes.byref(mode)) and k.SetConsoleMode(handle, mode.value | 0x0004):
+            _vt_state["ok"] = True
+    except Exception:
+        pass
+    return _vt_state["ok"]
+
+
+def process_memory_mb() -> float:
+    """Working-set memory of this program in MB (used to verify the 'minimal RAM' goal)."""
+    try:
+        if sys.platform != "win32":
+            import resource
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+        import ctypes
+        from ctypes import wintypes
+
+        class PMC(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                        ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                        ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+        k, p = ctypes.windll.kernel32, ctypes.windll.psapi
+        k.GetCurrentProcess.restype = wintypes.HANDLE
+        p.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD]
+        pmc = PMC()
+        pmc.cb = ctypes.sizeof(PMC)
+        if p.GetProcessMemoryInfo(k.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb):
+            return pmc.WorkingSetSize / 1048576.0
+    except Exception:
+        pass
+    return 0.0
+
+
 class _CountHandler(logging.Handler):
     """Counts records per level for the session footer."""
     def __init__(self):
@@ -162,11 +237,16 @@ class _SafeStreamHandler(logging.StreamHandler):
             stream = self.stream
             if stream is None:
                 return
+            text = msg
+            if _enable_vt(stream):
+                color = _ANSI.get(classify_line(msg), "")
+                if color:
+                    text = f"{color}{msg}\033[0m"
             try:
-                stream.write(msg + self.terminator)
+                stream.write(text + self.terminator)
             except UnicodeEncodeError:
                 enc = getattr(stream, "encoding", None) or "ascii"
-                stream.write(msg.encode(enc, "replace").decode(enc, "replace") + self.terminator)
+                stream.write(text.encode(enc, "replace").decode(enc, "replace") + self.terminator)
             self.flush()
         except Exception:
             pass
@@ -305,10 +385,75 @@ def setup_logging(log_root: Path, keep_sessions: int = 500, level=logging.DEBUG)
     logger.info("Disk space   : project drive -> %s", _free_space_text(log_root))
     logger.info("=" * 78)
     if previous:
-        logger.warning("The PREVIOUS session did not end cleanly (crash, window force-closed, or power loss): %s", previous)
+        last_alive = _recover_previous(previous, log_root / "heartbeat.txt")
+        logger.warning("The PREVIOUS session did not end cleanly (computer shut down/restarted/slept, window killed, or a crash): %s"
+                       "  Last sign of life: %s. A recovery note was added at the end of that file.", previous, last_alive)
 
     _prune_old_sessions(sessions, keep_sessions, logger)
+    logger.info("Memory       : %.0f MB at start", process_memory_mb())
+    start_watchdog(log_root)
     return logger
+
+
+def _recover_previous(previous: str, heartbeat: Path) -> str:
+    """Append a closing note to a session log that never got its footer; returns the last time it was alive."""
+    last = "unknown"
+    try:
+        if heartbeat.exists():
+            epoch = float(heartbeat.read_text(encoding="utf-8").split("|")[0])
+            last = datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
+    except (OSError, ValueError):
+        pass
+    try:
+        p = Path(previous)
+        if p.exists() and "SESSION END" not in p.read_text(encoding="utf-8", errors="replace")[-3000:]:
+            with open(p, "a", encoding="utf-8") as f:
+                f.write("=" * 78 + "\n")
+                f.write(f"SESSION END (recovered by the next start): the program did not close normally.\n"
+                        f"Most likely the computer was shut down, restarted or lost power while it was running, or the window was killed.\n"
+                        f"Last sign of life: {last}\n")
+                f.write("=" * 78 + "\n")
+    except OSError:
+        pass
+    return last
+
+
+def start_watchdog(log_root: Path, tick: float = 5.0) -> None:
+    """Tiny background thread (almost no RAM/CPU):
+       * writes a 'still alive' time every 30 s (so a crash/shutdown can be dated next start)
+       * notices when the computer was asleep/frozen (explains requests that took a minute)
+       * logs memory use every 10 minutes and remembers the peak"""
+    hb = Path(log_root) / "heartbeat.txt"
+    logger = get_logger()
+    _session["peak_mb"] = 0.0
+
+    def loop():
+        last_tick = last_hb = last_mem = time.time()
+        while not _session["ended"]:
+            time.sleep(tick)
+            now = time.time()
+            gap = now - last_tick
+            if gap > tick * 5:
+                logger.warning("The computer was asleep, locked or frozen for about %d seconds (the program was not running "
+                               "during that time - this explains any very slow request around now).", int(gap - tick))
+            last_tick = now
+            if now - last_hb >= 30:
+                last_hb = now
+                try:
+                    hb.write_text(f"{now}|{_session['path']}", encoding="utf-8")
+                except OSError:
+                    pass
+            if now - last_mem >= 600:
+                last_mem = now
+                mb = process_memory_mb()
+                _session["peak_mb"] = max(_session["peak_mb"], mb)
+                logger.debug("Memory: %.0f MB in use by this program", mb)
+
+    try:
+        hb.write_text(f"{time.time()}|{_session['path']}", encoding="utf-8")
+    except OSError:
+        pass
+    threading.Thread(target=loop, name="Watchdog", daemon=True).start()
 
 
 def _prune_old_sessions(sessions: Path, keep: int, logger) -> None:
@@ -366,6 +511,8 @@ def end_session(reason: str = "normal exit") -> None:
     logger.info("=" * 78)
     logger.info("SESSION END   reason: %s", reason)
     logger.info("Duration     : %dh %02dm %02ds", h, m, s)
+    mb = process_memory_mb()
+    logger.info("Memory       : %.0f MB now, peak seen %.0f MB", mb, max(mb, _session.get("peak_mb", 0.0)))
     logger.info("Log records  : %s", ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "none")
     with _stats_lock:
         stats = dict(STATS)

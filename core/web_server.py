@@ -35,11 +35,12 @@ from flask import (Flask, abort, g, jsonify, redirect, render_template, request,
                    send_from_directory, session, url_for)
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.wsgi import FileWrapper
 from hmac import compare_digest
 
 import net_utils
 import room_manager
-from history_store import (HistoryStore, KIND_FILE_FROM_PHONE, KIND_FILE_TO_PHONE)
+from history_store import (HistoryStore, KIND_FILE_FROM_PHONE, KIND_FILE_TO_PHONE, SCOPE_PHONE_FILES)
 from logger import get_logger, ring_since, stat_add
 from public_url import PublicUrlWatcher
 from qr_helper import make_qr_data_uri
@@ -68,6 +69,35 @@ def _segments(rel: str, fallback: str) -> list:
     segs = [_clip_segment(safe_filename(p)) for p in (rel or "").replace("\\", "/").split("/")
             if p not in ("", ".", "..")]
     return segs or [_clip_segment(safe_filename(fallback))]
+
+
+class _TrackedFile:
+    """File wrapper that counts the bytes actually read for a download and reports when the transfer ends.
+    (Werkzeug's call_on_close never fires for file downloads, so the old log could not say whether a
+    large download finished - it only said 'Client disconnected'.) Everything else is delegated to the
+    real file, so waitress still streams it efficiently and range requests keep working."""
+
+    def __init__(self, f, on_close):
+        self._f, self._on_close, self.sent, self._closed = f, on_close, 0, False
+
+    def read(self, *a):
+        data = self._f.read(*a)
+        self.sent += len(data)
+        return data
+
+    def close(self):
+        if not self._closed:
+            self._closed = True
+            try:
+                self._f.close()
+            finally:
+                try:
+                    self._on_close(self.sent)
+                except Exception:
+                    log.debug("download close callback failed", exc_info=True)
+
+    def __getattr__(self, name):
+        return getattr(self._f, name)
 
 
 class TransferServer:
@@ -106,6 +136,10 @@ class TransferServer:
         self._pin_lock = threading.Lock()
         self._unique_lock = threading.Lock()
         self._qr_cache = {}
+        self._warned_internet_copy = False
+        self._logged_tunnel_headers = False
+        self._stopping = False
+        self._install_shutdown_filter()
         self._probe_hits = {}         # ip -> recent 404 timestamps (internet scanners)
         self._probe_blocked = {}      # ip -> blocked until
         self._probe_lock = threading.Lock()
@@ -150,6 +184,9 @@ class TransferServer:
         pub_host = (urlparse(self.public.state.get("url", "")).hostname or "").lower()
         host_public = host.endswith(".ts.net") or bool(pub_host and host == pub_host)
         via_tunnel = header_tunnel or host_public
+        if via_tunnel and not self._logged_tunnel_headers:
+            self._logged_tunnel_headers = True       # one-time clue for finding the visitor's real address
+            log.debug("Internet request header names (for finding the real visitor address): %s", sorted(request.headers.keys()))
         is_lan = (not via_tunnel) and net_utils.is_lan_address(raw_ip)
         is_this_pc = is_lan and (raw_ip in ("127.0.0.1", "::1") or raw_ip == net_utils.get_local_ip())
         return {"ip": request.remote_addr or raw_ip, "raw_ip": raw_ip, "via_tunnel": via_tunnel,
@@ -247,6 +284,11 @@ class TransferServer:
         except OSError:
             return
         with self._share_lock:
+            known = self._share_index.get(path.name)
+            if known is not None and time.time() - known["ts"] < 10:
+                # The same file was registered a moment ago (the app's copy thread and the folder scan
+                # both noticed it - the history showed duplicate entries). Keep one.
+                return
             entry = self.history.add(KIND_FILE_TO_PHONE, name=path.name, size=size, path=str(path))
             self._share_index[path.name] = entry
 
@@ -258,6 +300,8 @@ class TransferServer:
         except OSError:
             return
         for p in entries:
+            if p.name.endswith(".part"):
+                continue            # still being copied/zipped - not ready for the phone
             try:
                 mtime = p.stat().st_mtime
             except OSError:
@@ -433,11 +477,14 @@ class TransferServer:
             self._sync_share_index(share_dir)
             hours = self.visible_hours()
             cutoff = time.time() - hours * 3600 if hours > 0 else 0
+            cleared = self.history.cleared_upto(SCOPE_PHONE_FILES)
             items = []
             with self._share_lock:
                 index = dict(self._share_index)
             for name, e in index.items():
                 if cutoff and e["ts"] < cutoff:
+                    continue
+                if e["id"] <= cleared:
                     continue
                 p = share_dir / name
                 try:
@@ -450,6 +497,13 @@ class TransferServer:
             items.sort(key=lambda i: i["added"], reverse=True)
             return jsonify({"ok": True, "files": items, "visible_hours": hours})
 
+        @app.route("/files/clear", methods=["POST"])
+        def clear_files_list():
+            n = self.history.clear_scope(SCOPE_PHONE_FILES)
+            log.info("Phone page: 'Get from laptop' list cleared from %s (%d item(s) hidden; the files stay on the laptop)",
+                     self.client_info()["ip"], n)
+            return jsonify({"ok": True, "hidden": n})
+
         @app.route("/download/<path:filename>")
         def download(filename):
             share_dir = Path(self.cfg["share_folder"]).resolve()
@@ -461,7 +515,7 @@ class TransferServer:
             if not target.is_file():
                 return jsonify({"ok": False, "error": "File not found"}), 404
             self._log_download(target.name)
-            return send_from_directory(share_dir, safe_name, as_attachment=True, max_age=0)
+            return self._serve_tracked(share_dir, safe_name, target.name)
 
         # ---------------- text ----------------
         @app.route("/text/to-laptop", methods=["POST"])
@@ -472,17 +526,29 @@ class TransferServer:
                 return jsonify({"ok": False, "error": "No text provided"}), 400
             ci = self.client_info()
             copied = False
-            if self.cfg.get("auto_copy_text", True):
-                if ci["is_this_pc"]:
-                    log.info("Text typed on this laptop itself (%d chars) - clipboard left untouched", len(text))
-                elif ci["is_lan"]:
-                    copied = clipboard_helper.copy_text(text)
-                    if copied:
-                        log.info("Text from %s (%d chars) was copied to the laptop clipboard automatically", ci["ip"], len(text))
-                    else:
-                        log.warning("Text from %s could not be copied to the clipboard automatically", ci["ip"])
+            scope = self.cfg.get("auto_copy_text_scope", "everywhere") if self.cfg.get("auto_copy_text", True) else "off"
+            if scope == "off":
+                log.debug("Auto-copy is turned off - text from %s not copied", ci["ip"])
+            elif ci["is_this_pc"]:
+                log.info("Text typed on this laptop itself (%d chars) - clipboard left untouched", len(text))
+            elif ci["is_lan"] or scope == "everywhere":
+                t_copy = time.time()
+                copied = clipboard_helper.copy_text(text)
+                took = time.time() - t_copy
+                where = "local Wi-Fi" if ci["is_lan"] else "the internet link"
+                if copied:
+                    log.info("Text from %s over %s (%d chars) was copied to the laptop clipboard automatically (%.0f ms)",
+                             ci["ip"], where, len(text), took * 1000)
                 else:
-                    log.info("Text arrived over the internet/tunnel from %s - NOT auto-copied (only local Wi-Fi text is)", ci["ip"])
+                    log.warning("Text from %s could not be copied to the clipboard automatically", ci["ip"])
+                if took > 1.0:
+                    log.warning("Copying to the clipboard took %.1f s - another program is probably holding the clipboard", took)
+                if copied and not ci["is_lan"] and not self.cfg.get("require_access_pin") and not self._warned_internet_copy:
+                    self._warned_internet_copy = True
+                    log.warning("Internet text is being copied to your clipboard while NO access PIN is set: anyone with your public "
+                                "link could replace your clipboard. Turn on Public Access > 'Ask visitors for a PIN'.")
+            else:
+                log.info("Text arrived over the internet link from %s - not auto-copied (Settings: auto-copy is 'local Wi-Fi only')", ci["ip"])
             entry = self.text_store.add_to_laptop(text, via="lan" if ci["is_lan"] else "internet", copied=copied)
             stat_add("texts_received")
             log.info("Received text from %s (%d characters, id %d, %s)", ci["ip"], len(text), entry["id"],
@@ -492,7 +558,15 @@ class TransferServer:
         @app.route("/text/to-phone")
         def text_to_phone():
             since = request.args.get("since", default=0, type=int)
-            return jsonify({"ok": True, "texts": self.text_store.list_to_phone(since, self.visible_hours())})
+            return jsonify({"ok": True, "texts": self.text_store.list_to_phone(since, self.visible_hours()),
+                            "cleared_upto": self.text_store.phone_cleared_upto()})
+
+        @app.route("/text/clear", methods=["POST"])
+        def clear_phone_texts():
+            n = self.text_store.clear_phone_page()
+            log.info("Phone page: 'Text from laptop' list cleared from %s (%d item(s) hidden; saved texts stay on the laptop)",
+                     self.client_info()["ip"], n)
+            return jsonify({"ok": True, "hidden": n})
 
         self._register_room_routes()
         self._register_admin_routes()
@@ -555,6 +629,11 @@ class TransferServer:
         try:
             path = request.path
             status = response.status_code
+            took = time.time() - getattr(g, "t0", time.time())
+            if took > 3.0 and request.endpoint not in ("upload_raw", "upload_legacy", "download", "room_download",
+                                                       "room_upload_raw", "admin_share_upload", "admin_received"):
+                log.warning("Slow response: %s %s took %.1f s (from %s). If a 'computer was asleep' notice appears just "
+                            "before this, that is the cause.", request.method, path, took, self.client_info()["ip"])
             if status == 404 and not self.client_info()["is_lan"]:
                 return   # internet probes are counted/blocked above, not logged one by one
             if status < 400 and (path.startswith("/static") or path in _POLLING_PATHS
@@ -578,8 +657,41 @@ class TransferServer:
         if rng and not rng.replace(" ", "").startswith("bytes=0-"):
             return
         stat_add("downloads")
-        log.info("%sSending '%s' to %s%s", prefix, name, self.client_info()["ip"],
-                 " (browser may use several parallel range requests)" if rng else "")
+        ip = self.client_info()["ip"]
+        log.info("%sSending '%s' to %s%s", prefix, name, ip,
+                 f" (Range: {rng})" if rng else "")
+
+    def _serve_tracked(self, root: Path, rel_posix: str, name: str, prefix: str = ""):
+        """Send a file as a download and log how it ended: finished (size, time, MB/s) or stopped early."""
+        target = root / rel_posix
+        ci = self.client_info()
+        rng = request.headers.get("Range", "")
+        started = time.time()
+        stat = target.stat()
+        total = stat.st_size
+
+        def ended(sent: int):
+            secs = max(time.time() - started, 0.001)
+            if rng:
+                log.debug("%sRange request for '%s' from %s done: %.1f MB sent in %.1fs (Range: %s)",
+                          prefix, name, ci["ip"], sent / MB, secs, rng)
+            elif sent >= total:
+                log.info("%sFinished sending '%s' to %s: %.1f MB in %.1fs = %.1f MB/s",
+                         prefix, name, ci["ip"], total / MB, secs, total / MB / secs)
+            else:
+                log.warning("%sDownload of '%s' by %s STOPPED EARLY: %.1f of %.1f MB after %.1fs. The phone cancelled, "
+                            "paused, or lost Wi-Fi (browsers usually resume with a new request).",
+                            prefix, name, ci["ip"], sent / MB, total / MB, secs)
+
+        # Let Werkzeug do the sending (size, ETag, range requests all keep working) but hand it a
+        # file wrapper that counts the bytes read and reports when the transfer ends.
+        orig = request.environ.get("wsgi.file_wrapper") or FileWrapper
+
+        def tracked_wrapper(f, block_size=8192):
+            return orig(_TrackedFile(f, ended), block_size)
+
+        request.environ["wsgi.file_wrapper"] = tracked_wrapper
+        return send_from_directory(root, rel_posix, as_attachment=True, max_age=0)
 
     def _lan_tip_context(self, path_suffix: str = "/") -> dict:
         ci = self.client_info()
@@ -687,7 +799,7 @@ class TransferServer:
                 return jsonify({"ok": False, "error": "File not found"}), 404
             room_manager.touch_room(code)
             self._log_download(target.name, prefix=f"Room {code}: ")
-            return send_from_directory(room_dir, target.relative_to(room_dir).as_posix(), as_attachment=True, max_age=0)
+            return self._serve_tracked(room_dir, target.relative_to(room_dir).as_posix(), target.name, prefix=f"Room {code}: ")
 
         @app.route("/room/<code>/text", methods=["POST"])
         def room_text_post(code):
@@ -835,10 +947,29 @@ class TransferServer:
     # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #
+    def _install_shutdown_filter(self):
+        """During shutdown, in-flight browser connections make waitress log
+        'OSError [WinError 10038] ... not a socket' as ERROR (seen on every quit in the logs).
+        It is harmless, so while stopping those records are downgraded to one quiet line."""
+        import logging
+        server = self
+
+        class _ShutdownNoise(logging.Filter):
+            def filter(self, record):
+                if server._stopping and record.levelno >= logging.ERROR and "Exception when servicing" in record.getMessage():
+                    record.levelno, record.levelname = logging.DEBUG, "DEBUG"
+                    record.msg = "(shutdown) a browser connection was still open while the server closed - harmless"
+                    record.args = ()
+                    record.exc_info = None
+                    record.exc_text = None
+                return True
+        logging.getLogger("waitress").addFilter(_ShutdownNoise())
+
     def start(self):
         if self._running:
             log.debug("Server start requested but already running")
             return
+        self._stopping = False
         from waitress.server import create_server
 
         port = int(self.cfg["server_port"])
@@ -898,6 +1029,7 @@ class TransferServer:
             log.debug("Server stop requested but not running")
             return
         log.info("Stopping server...")
+        self._stopping = True            # waitress logs harmless 'not a socket' errors while closing
         self._cleanup_stop_event.set()
         self.public.stop()
         try:

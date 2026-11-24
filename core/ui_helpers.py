@@ -25,6 +25,16 @@ _scroll_canvases = []
 _wheel_installed = {"done": False}
 
 
+class StampedVar(tk.StringVar):
+    """Status text that always starts with the time it was set: [14:03:22] Sent 3 files.
+    (Requirement: show progress with time stamps, nothing hidden.)"""
+
+    def set(self, value):
+        import time
+        text = str(value)
+        super().set(f"[{time.strftime('%H:%M:%S')}] {text}" if text else "")
+
+
 def set_right_click_pastes(value: bool) -> None:
     _settings["right_click_pastes"] = bool(value)
 

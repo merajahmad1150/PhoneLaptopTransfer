@@ -25,7 +25,20 @@ DANGER = "#ff6b6b"
 OK = "#34d67a"
 WARN = "#ffb020"
 LOG_BG = "#0a0820"
-GRADIENT_STOPS = [(124, 77, 255), (44, 140, 255), (28, 214, 180)]
+GRADIENTS = {
+    "Aurora": [(124, 77, 255), (44, 140, 255), (28, 214, 180)],
+    "Sunset": [(255, 94, 98), (255, 153, 102), (255, 208, 86)],
+    "Ocean": [(0, 114, 255), (0, 198, 255), (94, 234, 212)],
+    "Forest": [(17, 153, 142), (56, 239, 125), (180, 236, 81)],
+    "Berry": [(142, 45, 226), (210, 70, 170), (255, 130, 130)],
+    "Midnight": [(30, 27, 75), (67, 56, 202), (99, 102, 241)],
+}
+GRADIENT_STOPS = list(GRADIENTS["Aurora"])
+
+
+def set_gradient(name: str) -> None:
+    """Switch the header colours (the header redraws itself when you call GradientHeader.redraw())."""
+    GRADIENT_STOPS[:] = GRADIENTS.get(name, GRADIENTS["Aurora"])
 
 FONT = ("Segoe UI", 10)
 FONT_BOLD = ("Segoe UI", 10, "bold")
@@ -98,26 +111,35 @@ def apply_theme(root: tk.Tk) -> None:
 def style_log_widget(widget) -> None:
     widget.configure(bg=LOG_BG, fg="#cfd8ff", insertbackground=TEXT, font=FONT_MONO, relief="flat",
                      highlightthickness=1, highlightbackground=PANEL_BORDER, selectbackground=ACCENT_2)
+    widget.tag_configure("dim", foreground="#5f5b8f")                 # routine lines: light, easy to ignore
+    widget.tag_configure("important", foreground="#7ff0e0", font=(FONT_MONO[0], FONT_MONO[1], "bold"))
     widget.tag_configure("warning", foreground=WARN)
     widget.tag_configure("error", foreground=DANGER)
     widget.tag_configure("critical", foreground="#ff3b6b", font=(FONT_MONO[0], FONT_MONO[1], "bold"))
 
 
 class GradientHeader:
-    """Canvas with the gradient, the logo, the title and subtitle. The gradient
-    image is rebuilt only after the window stops resizing (debounced)."""
+    """Canvas with the gradient, the logo, the title/subtitle and (top right) the Settings gear.
+    The gradient image is rebuilt only after the window stops resizing (debounced)."""
 
-    def __init__(self, parent, title, subtitle="", logo_image=None, height=72):
+    def __init__(self, parent, title, subtitle="", logo_image=None, height=72, gear_image=None, on_gear=None,
+                 logo_tip="", gear_tip="Settings"):
         self.canvas = tk.Canvas(parent, height=height, highlightthickness=0, bd=0, bg=BG)
         self.height = height
         self._photo = None
         self._logo = logo_image
+        self._gear = gear_image
+        self._on_gear = on_gear
+        self._logo_tip, self._gear_tip = logo_tip, gear_tip
         self._title, self._subtitle = title, subtitle
         self._after = None
         self.canvas.bind("<Configure>", self._schedule)
 
     def pack(self, **kw):
         self.canvas.pack(**kw)
+
+    def redraw(self):
+        self._schedule()
 
     def _schedule(self, _event=None):
         if self._after:
@@ -126,6 +148,7 @@ class GradientHeader:
 
     def _draw(self):
         self._after = None
+        import tooltip
         w = max(self.canvas.winfo_width(), 10)
         self._photo = ImageTk.PhotoImage(gradient_image(w, self.height))
         c = self.canvas
@@ -133,9 +156,15 @@ class GradientHeader:
         c.create_image(0, 0, image=self._photo, anchor="nw")
         x = 16
         if self._logo is not None:
-            c.create_image(14, self.height // 2, image=self._logo, anchor="w")
+            c.create_image(14, self.height // 2, image=self._logo, anchor="w", tags="logo")
             x = 14 + self._logo.width() + 12
+            if self._logo_tip:
+                tooltip.add_canvas_tip(c, "logo", self._logo_tip)
         c.create_text(x, self.height // 2 - (10 if self._subtitle else 0), text=self._title,
                       fill="white", font=FONT_TITLE, anchor="w")
         if self._subtitle:
             c.create_text(x, self.height // 2 + 14, text=self._subtitle, fill="#e8eaff", font=FONT, anchor="w")
+        if self._gear is not None:
+            c.create_image(w - 16, self.height // 2, image=self._gear, anchor="e", tags="gear")
+            c.tag_bind("gear", "<Button-1>", lambda e: self._on_gear and self._on_gear())
+            tooltip.add_canvas_tip(c, "gear", self._gear_tip)

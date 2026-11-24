@@ -85,3 +85,92 @@ def copy_text(text: str, retries: int = 15) -> bool:
     except Exception:
         log.error("Clipboard copy crashed", exc_info=True)
         return False
+
+
+# ---------------------------------------------------------------------- #
+# Files and pictures (for the Clip Shelf and for pasting screenshots)
+# ---------------------------------------------------------------------- #
+def _set_clipboard_data(fmt: int, data: bytes, retries: int = 15) -> bool:
+    """Put raw bytes on the clipboard in clipboard format `fmt` (Windows only)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        user32.OpenClipboard.argtypes = [wintypes.HWND]
+        user32.OpenClipboard.restype = wintypes.BOOL
+        user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+        user32.SetClipboardData.restype = wintypes.HANDLE
+        kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+        kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+        kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+        for _ in range(retries):
+            if user32.OpenClipboard(None):
+                break
+            time.sleep(0.05)
+        else:
+            log.warning("Could not open the clipboard - another program is holding it")
+            return False
+        try:
+            handle = kernel32.GlobalAlloc(_GMEM_MOVEABLE, len(data))
+            ptr = kernel32.GlobalLock(handle) if handle else None
+            if not ptr:
+                if handle:
+                    kernel32.GlobalFree(handle)
+                return False
+            ctypes.memmove(ptr, data, len(data))
+            kernel32.GlobalUnlock(handle)
+            user32.EmptyClipboard()
+            if not user32.SetClipboardData(fmt, handle):
+                kernel32.GlobalFree(handle)
+                return False
+            return True
+        finally:
+            user32.CloseClipboard()
+    except Exception:
+        log.error("Clipboard write (format %s) crashed", fmt, exc_info=True)
+        return False
+
+
+def copy_files(paths) -> bool:
+    """Put files on the clipboard like Explorer's Ctrl+C, so Ctrl+V in Explorer/WhatsApp/Instagram pastes the files."""
+    import struct
+    paths = [str(p) for p in paths]
+    if not paths:
+        return False
+    blob = ("\0".join(paths) + "\0\0").encode("utf-16-le")
+    header = struct.pack("<IiiII", 20, 0, 0, 0, 1)          # DROPFILES: offset 20, point 0,0, not NC, wide chars
+    ok = _set_clipboard_data(15, header + blob)               # CF_HDROP
+    log.debug("Clipboard: %d file(s) copied -> %s", len(paths), ok)
+    return ok
+
+
+def copy_image(img) -> bool:
+    """Put a PIL image on the clipboard as a bitmap (pastes into Paint, WhatsApp Web, Instagram web, Word...)."""
+    import io
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "BMP")
+    ok = _set_clipboard_data(8, buf.getvalue()[14:])          # CF_DIB = BMP without its 14-byte file header
+    log.debug("Clipboard: image %sx%s copied -> %s", img.width, img.height, ok)
+    return ok
+
+
+def grab_image_or_files():
+    """What is on the clipboard besides text? -> ("image", PIL.Image) | ("files", [paths]) | (None, None).
+    A Win+Shift+S screenshot is an image; files copied in Explorer are a file list."""
+    try:
+        from PIL import ImageGrab
+        got = ImageGrab.grabclipboard()
+    except Exception:
+        log.debug("Could not read an image from the clipboard", exc_info=True)
+        return None, None
+    if got is None:
+        return None, None
+    if isinstance(got, (list, tuple)):
+        return "files", [str(p) for p in got]
+    return "image", got

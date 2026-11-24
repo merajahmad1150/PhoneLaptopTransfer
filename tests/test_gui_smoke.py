@@ -17,6 +17,7 @@ class Fake:
         if name.startswith("__"): raise AttributeError(name)
         m = MagicMock(name=name)
         if name == "winfo_toplevel": return lambda: self
+        if name == "clipboard_get": return lambda *a: "clip text"
         if name == "master": return None
         if name == "yview": return lambda *a: (0.0, 1.0)
         if name == "curselection": return lambda: ()
@@ -24,8 +25,13 @@ class Fake:
         if name == "cget": return lambda *a: "normal"
         if name == "get": return lambda *a: ""
         if name == "size": return lambda: 0
+        if name in ("winfo_x", "winfo_y"): return lambda: 100
+        if name == "winfo_height": return lambda: 380
+        if name == "nearest": return lambda *a: 0
+        if name == "winfo_pointerx": return lambda: 500
+        if name == "winfo_pointery": return lambda: 400
         if name == "index": return lambda *a: "5.0"
-        if name == "winfo_width": return lambda: 800
+        if name == "winfo_width": return lambda: 300
         if name == "winfo_reqheight": return lambda: 400
         if name == "winfo_screenwidth": return lambda: 1920
         if name == "winfo_screenheight": return lambda: 1080
@@ -35,6 +41,7 @@ class Var:
     def __init__(self, master=None, value=None): self.v = "" if value is None else value
     def get(self): return self.v
     def set(self, v): self.v = v
+    def trace_add(self, *a): pass
 def mk(name, base=Fake): return type(name, (base,), {})
 tk = types.ModuleType("tkinter")
 for n in ("Tk Toplevel Frame Canvas Label Menu Event Widget Entry Button Scrollbar".split()): setattr(tk, n, mk(n))
@@ -97,8 +104,35 @@ win._refresh_mirror_devices(); win._connect_by_address(); win._check_adb(); win.
 win._apply_public_state({"url": "https://pc.ts.net:8443/", "is_funnel": True, "source": "auto", "message": "LIVE"})
 win._apply_public_state({"url": "", "is_funnel": False, "source": "", "message": "none"})
 win._generate_new_pin(); win._toggle_require_pin(); win._save_room_limits(); win._toggle_rooms_enabled()
+win.quality_preset_var.set(list(__import__("gui_mirror").QUALITY_PRESETS)[1]); win._apply_quality_preset(); win._pair_by_code(); win._clipboard_to_phone_page(); win._send_files_to_phone_gallery()
+server.text_store.add_to_phone("sent text"); server.register_shared_file(tmp/"r"/"x.txt"); win._poll_queues(); run_after(); win._on_sent_text_select(); win._sigint = True; win._poll_queues()
 win._save_settings(); win._save_mirror_settings(); win._show_shortcuts(); win._zip_logs(); win._copy_log_path()
 win._append_log(["a [WARNING ] x", "b [ERROR ] y", "c"])
+# ---- v2.2: shelf, drops, screenshot paste, appearance ----
+import clipboard_helper, shelf_window, dnd
+from PIL import Image
+assert win.shelf is not None, "the Clip Shelf was not created"
+sh = win.shelf
+sh.add_text("caption one #tag"); sh.add_text("Urdu \u0633\u0644\u0627\u0645"); sh.add_paths([str(tmp/"r"/"x.txt")]); sh.capture_clipboard()
+assert len(sh.store.items) >= 4, "shelf items were not stored"
+sh.lb.curselection = lambda: (0,)
+for fn in (sh.use_selected, sh.copy_selected, sh.edit_selected, lambda: sh.move_selected("bottom"), lambda: sh.move_selected("middle"),
+           lambda: sh.move_selected("top"), sh.send_selected_to_phone, sh.reveal_selected, sh.toggle_search_off if hasattr(sh, "toggle_search_off") else (lambda: sh.toggle_search(False))):
+    fn()
+ev = type("E", (), dict(x=1, y=1, x_root=1, y_root=1))()
+sh._context_menu(ev); sh._main_menu(); sh._add_menu(); sh._drag_payload(ev); sh.collapse(); sh.expand(); sh.toggle(); sh.toggle()
+sh._set("shelf_opacity", 0.8); sh._set("shelf_font_size", 11); sh._reset_geometry(); sh._poll()
+sh.lb.curselection = lambda: (0,); sh.delete_selected()
+# drops + screenshot paste
+win.current_page = "transfer"; win._on_drop_files([str(tmp/"r"/"x.txt")]); win._on_drop_text("dropped words")
+shot = Image.new("RGB", (64, 48), (10, 120, 200)); clipboard_helper.grab_image_or_files = lambda: ("image", shot)
+import time as _t; before = len(server.history.list(["file_to_phone"]))
+win._on_ctrl_v(); _t.sleep(0.8)
+shots = list(Path(cfg["share_folder"]).glob("screenshot_*.png")); assert shots, "screenshot was not saved to the share folder"
+assert len(server.history.list(["file_to_phone"])) > before, "screenshot was not registered for the phone"
+clipboard_helper.grab_image_or_files = lambda: (None, None); win._paste_clipboard_to_phone()
+win._apply_gradient(); win._apply_log_visibility(); win._apply_hidden_pages(); win._toggle_shelf(); win._toggle_shelf(); win._save_settings()
+win._run_self_test if False else None
 win._on_close()
 assert saved, "config was not saved on close"
 # startup dialog + stub of ui_helpers key paths

@@ -14,11 +14,15 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import ImageTk
 
+import clipboard_helper
+import dnd
 import net_utils
 import theme
 import ui_helpers
 import zip_utils
-from history_store import KIND_FILE_FROM_PHONE
+from history_store import (KIND_FILE_ADB, KIND_FILE_FROM_PHONE, KIND_FILE_TO_PHONE, KIND_TEXT_TO_PHONE,
+                           SCOPE_PHONE_FILES)
+from timefmt import fmt_dt
 from logger import get_logger
 from qr_helper import make_qr_image
 from safe_names import safe_filename
@@ -87,10 +91,27 @@ class TransferMixin:
         ttk.Button(r1, text="Add Folder...  (Ctrl+Shift+O)", command=self._safe(self._add_folder_to_share)).pack(side="left", padx=6)
         ttk.Button(r1, text="Open Share Folder", command=self._safe(self._open_share_folder)).pack(side="left")
         ttk.Button(r1, text="Clear", style="Danger.TButton", command=self._safe(self._clear_share_folder)).pack(side="right")
-        self.share_status_var = tk.StringVar(value="")
-        ttk.Label(share, textvariable=self.share_status_var, style="Muted.TLabel").pack(anchor="w", padx=8, pady=(0, 6))
+        self.dropzone = tk.Label(share, text=self._dropzone_text(), bg=theme.PANEL_ALT, fg=theme.ACCENT, font=theme.FONT_BOLD,
+                                 relief="groove", bd=2, height=3, cursor="hand2", justify="center")
+        self.dropzone.pack(fill="x", padx=8, pady=(0, 4))
+        self.dropzone.bind("<Button-1>", self._safe(lambda e: self._add_files_to_share()))
+        r1b = ttk.Frame(share)
+        r1b.pack(fill="x", padx=8, pady=(0, 4))
+        ttk.Button(r1b, text="Paste screenshot / copied files  (Ctrl+Shift+V)", command=self._safe(self._paste_clipboard_to_phone)).pack(side="left")
+        ttk.Button(r1b, text="Run self-test (simulates a phone)", command=self._safe(self._run_self_test)).pack(side="left", padx=6)
+        self.selftest_var = ui_helpers.StampedVar(value="")
+        self.share_status_var = ui_helpers.StampedVar(value="")
+        ttk.Label(share, textvariable=self.share_status_var, style="Muted.TLabel", wraplength=640).pack(anchor="w", padx=8, pady=(0, 2))
+        ttk.Label(share, textvariable=self.selftest_var, style="Muted.TLabel", wraplength=640).pack(anchor="w", padx=8, pady=(0, 6))
 
-        recv = ttk.LabelFrame(tab, text="Recently received from phone  (double-click to open)")
+        sent = ttk.LabelFrame(tab, text="Sent to phone  (with the time each file was sent)")
+        sent.pack(fill="x", padx=12, pady=6)
+        self.sent_listbox = tk.Listbox(sent, height=5, bg=theme.PANEL, fg=theme.TEXT, selectbackground=theme.ACCENT,
+                                       selectforeground=theme.ON_ACCENT, relief="flat", highlightthickness=1,
+                                       highlightbackground=theme.PANEL_BORDER, font=theme.FONT, activestyle="none")
+        self.sent_listbox.pack(fill="x", padx=8, pady=8)
+
+        recv = ttk.LabelFrame(tab, text="Received from phone  (double-click to open; time = when it arrived)")
         recv.pack(fill="both", expand=True, padx=12, pady=(6, 12))
         r2 = ttk.Frame(recv)
         r2.pack(fill="x", padx=8, pady=8)
@@ -105,12 +126,15 @@ class TransferMixin:
         self.received_listbox.bind("<Double-Button-1>", self._safe(lambda e: self._open_selected_received_file()))
         self.received_listbox.bind("<Return>", self._safe(lambda e: self._open_selected_received_file()))
 
-        # earlier files (history is saved on disk) so the list isn't empty after a restart
-        for e in self.server.history.list([KIND_FILE_FROM_PHONE])[-40:]:
+        # earlier files (history is saved on disk) so the lists aren't empty after a restart
+        for e in self.server.history.list([KIND_FILE_FROM_PHONE], include_cleared=False)[-40:]:
             p = Path(e.get("path", ""))
             if p.exists():
-                self._add_received_row(p, time.strftime("%H:%M:%S", time.localtime(e["ts"])))
+                self._add_received_row(p, fmt_dt(e["ts"]))
+        for e in self.server.history.list([KIND_FILE_TO_PHONE, KIND_FILE_ADB], include_cleared=False)[-40:]:
+            self._add_sent_row(e)
         self.server.on_file_received(self._on_file_received_threadsafe)
+        self.server.history.add_listener(self._on_history_entry)
         self._refresh_server_ui()
 
     # ---- server control ------------------------------------------------ #
@@ -179,6 +203,102 @@ class TransferMixin:
         if hasattr(self, "_apply_public_page_state"):
             self._apply_public_page_state(state)
 
+    # ---- drag & drop, screenshots ---------------------------------------- #
+    def _dropzone_text(self) -> str:
+        ready = dnd.is_ready(self.root)
+        return ("Drop files or folders here to send them to the phone\n"
+                + ("(or press Ctrl+V to send a screenshot / copied files)" if ready else
+                   "(drag-and-drop engine missing - run Start.bat again; the buttons above still work)"))
+
+    def _on_drop_files(self, paths):
+        """Files dropped on the window. Where they go depends on the page you are looking at."""
+        paths = [p for p in paths if os.path.exists(p)]
+        if not paths:
+            return
+        page = self.current_page
+        log.info("Dropped %d item(s) on the '%s' page", len(paths), page)
+        if page == "mirror":
+            files = [p for p in paths if os.path.isfile(p)]
+            if files:
+                self.show_page("mirror")
+                threading.Thread(target=self._gallery_push_files, args=(files,), name="DropGallery", daemon=True).start()
+        elif page == "adb":
+            self.push_local_var.set(paths[0])
+            self.adb_status_var.set(f"Dropped: {paths[0]} - choose the phone folder and press 'Push to phone'")
+        else:
+            self._share_paths(paths)
+
+    def _share_paths(self, paths):
+        share = Path(self.cfg["share_folder"])
+        share.mkdir(parents=True, exist_ok=True)
+        files = [p for p in paths if os.path.isfile(p)]
+        if files:
+            threading.Thread(target=self._copy_files_thread, args=(files, share), name="CopyToShare", daemon=True).start()
+        for folder in (p for p in paths if os.path.isdir(p)):
+            src = Path(folder)
+            dest = self._unique_local_path(share / (safe_filename(src.name) + ".zip"))
+            self.share_status_var.set(f"Zipping '{src.name}' ...")
+            threading.Thread(target=self._zip_folder_thread, args=(src, dest), name="ZipFolder", daemon=True).start()
+        if self.current_page != "transfer":
+            self.show_page("transfer")
+
+    def _on_drop_text(self, text: str):
+        if not text.strip():
+            return
+        if self.current_page == "text":
+            self.send_text_box.insert("end", text)
+            self.send_text_status.set("Text dropped into the box - press Ctrl+Enter to send")
+        else:
+            self.server.text_store.add_to_phone(text)
+            self.share_status_var.set(f"Dropped text ({len(text)} characters) sent to the phone page")
+            log.info("Dropped text (%d characters) queued for the phone", len(text))
+
+    def _on_ctrl_v(self, event=None):
+        """Ctrl+V outside a text box sends a pasted screenshot / copied files to the phone."""
+        try:
+            w = self.root.focus_get()
+        except KeyError:
+            w = None
+        if isinstance(w, (tk.Entry, tk.Text, ttk.Entry, ttk.Combobox)):
+            return None                      # normal text paste
+        self._paste_clipboard_to_phone(quiet_if_empty=True)
+        return None
+
+    def _paste_clipboard_to_phone(self, quiet_if_empty: bool = False):
+        kind, payload = clipboard_helper.grab_image_or_files()
+        if kind == "image":
+            threading.Thread(target=self._save_screenshot_thread, args=(payload,), name="Screenshot", daemon=True).start()
+        elif kind == "files":
+            self._share_paths([p for p in payload if os.path.exists(p)])
+        elif not quiet_if_empty:
+            try:
+                text = self.root.clipboard_get()
+            except tk.TclError:
+                text = ""
+            if text.strip():
+                self.server.text_store.add_to_phone(text)
+                self.share_status_var.set(f"Clipboard text ({len(text)} characters) sent to the phone page")
+            else:
+                self.share_status_var.set("The clipboard has no picture, files or text. Take a screenshot with Win+Shift+S first.")
+
+    def _save_screenshot_thread(self, image):
+        share = Path(self.cfg["share_folder"])
+        share.mkdir(parents=True, exist_ok=True)
+        t0 = time.time()
+        try:
+            dest = self._unique_local_path(share / f"screenshot_{time.strftime('%Y%m%d_%H%M%S')}.png")
+            part = dest.with_name(dest.name + ".part")
+            image.save(part, "PNG")
+            os.replace(part, dest)
+            self.server.register_shared_file(dest)
+            size = dest.stat().st_size
+            log.info("Screenshot sent to the phone page: %s (%dx%d, %s, %.1fs)", dest.name, image.width, image.height,
+                     _fmt_size(size), time.time() - t0)
+            self.ui(lambda: self.share_status_var.set(f"Screenshot '{dest.name}' ({image.width}x{image.height}, {_fmt_size(size)}) is ready on the phone"))
+        except Exception:
+            log.error("Could not save the pasted picture", exc_info=True)
+            self.ui(lambda: messagebox.showerror("Screenshot failed", "Could not save the pasted picture - details are in the log."))
+
     # ---- laptop -> phone ---------------------------------------------- #
     @staticmethod
     def _unique_local_path(path: Path) -> Path:
@@ -204,7 +324,9 @@ class TransferMixin:
             t0 = time.time()
             try:
                 dest = self._unique_local_path(share / safe_filename(Path(src).name))
-                shutil.copy2(src, dest)
+                part = dest.with_name(dest.name + ".part")     # invisible to the phone until complete
+                shutil.copy2(src, part)
+                os.replace(part, dest)
                 self.server.register_shared_file(dest)
                 size = dest.stat().st_size
                 log.info("Added to share folder: '%s' (%s, %.1fs)", dest.name, _fmt_size(size), time.time() - t0)
@@ -254,8 +376,15 @@ class TransferMixin:
             os.startfile(str(path))
         except OSError as exc:
             winerr = getattr(exc, "winerror", None)
-            log.warning("No default program for '%s' (%s) - showing the 'Open with' dialog", path, exc)
+            log.warning("No default program for '%s' (%s)", path, exc)
             if winerr in (1155, 31, 2) or "application" in str(exc).lower():
+                # Your browser can show PDFs, pictures, text and media - try that before asking you to pick a program.
+                if Path(path).is_file() and Path(path).suffix.lower() in (".pdf", ".html", ".htm", ".txt", ".png", ".jpg", ".jpeg",
+                                                                           ".gif", ".webp", ".svg", ".mp4", ".webm", ".mp3"):
+                    import webbrowser
+                    if webbrowser.open(Path(path).resolve().as_uri()):
+                        log.info("Opened '%s' in the web browser (no default program is set for this type)", Path(path).name)
+                        return
                 subprocess.Popen(["rundll32.exe", "shell32.dll,OpenAs_RunDLL", str(path)])
             else:
                 raise
@@ -305,11 +434,13 @@ class TransferMixin:
         if messagebox.askyesno("Delete shared files?",
                                f"This permanently deletes {n} file(s) ({_fmt_size(size)}) from:\n{folder}\n\nContinue?"):
             self._clear_folder_contents(folder)
+            self.server.history.clear_scope(SCOPE_PHONE_FILES)
+            self.sent_listbox.delete(0, "end")
             log.info("Cleared share folder: %d file(s), %s", n, _fmt_size(size))
 
     # ---- received list -------------------------------------------------- #
     def _add_received_row(self, path: Path, stamp: str = None):
-        stamp = stamp or time.strftime("%H:%M:%S")
+        stamp = stamp or fmt_dt(time.time())
         try:
             size = _fmt_size(path.stat().st_size)
         except OSError:
@@ -319,6 +450,20 @@ class TransferMixin:
         if self.received_listbox.size() > 200:
             self.received_listbox.delete("end")
             self._received_paths.pop()
+
+    def _add_sent_row(self, e: dict):
+        how = "USB/Wi-Fi ADB -> phone gallery" if e.get("kind") == KIND_FILE_ADB else "Wi-Fi share"
+        self.sent_listbox.insert(0, f"  {fmt_dt(e['ts'])}   {e.get('name', '?')}   ({_fmt_size(int(e.get('size') or 0))})   [{how}]")
+        if self.sent_listbox.size() > 200:
+            self.sent_listbox.delete("end")
+
+    def _on_history_entry(self, entry: dict):
+        """Called from any thread whenever something is recorded in the history."""
+        kind = entry.get("kind")
+        if kind in (KIND_FILE_TO_PHONE, KIND_FILE_ADB):
+            self.ui(lambda: self._add_sent_row(entry))
+        elif kind == KIND_TEXT_TO_PHONE:
+            self.ui(lambda: self._add_sent_text_row(entry))
 
     def _on_file_received_threadsafe(self, path: Path):
         self.ui(lambda: self._add_received_row(Path(path)))
@@ -346,8 +491,9 @@ class TransferMixin:
     def _build_text_page(self, page):
         tab = ui_helpers.make_scrollable(page)
         self._text_entries = []
+        self._sent_text_entries = []
 
-        top = ttk.LabelFrame(tab, text="Text received from phone")
+        top = ttk.LabelFrame(tab, text="Text received from phone  (time = when it arrived)")
         top.pack(fill="both", expand=True, padx=12, pady=(10, 6))
         opts = ttk.Frame(top)
         opts.pack(fill="x", padx=8, pady=(8, 2))
@@ -374,6 +520,14 @@ class TransferMixin:
         ttk.Label(top, text="Everything stays saved in the ReceivedText folder, even after you clear this list.",
                   style="Muted.TLabel").pack(anchor="w", padx=8, pady=(0, 8))
 
+        sentbox = ttk.LabelFrame(tab, text="Text sent to phone  (time = when you sent it; click to preview)")
+        sentbox.pack(fill="x", padx=12, pady=6)
+        self.sent_text_listbox = tk.Listbox(sentbox, height=4, bg=theme.PANEL, fg=theme.TEXT, selectbackground=theme.ACCENT,
+                                            selectforeground=theme.ON_ACCENT, relief="flat", highlightthickness=1,
+                                            highlightbackground=theme.PANEL_BORDER, font=theme.FONT, activestyle="none")
+        self.sent_text_listbox.pack(fill="x", padx=8, pady=8)
+        self.sent_text_listbox.bind("<<ListboxSelect>>", self._safe(lambda e: self._on_sent_text_select()))
+
         send = ttk.LabelFrame(tab, text="Send text to phone  (Ctrl+Enter)")
         send.pack(fill="x", padx=12, pady=(6, 12))
         self.send_text_box = tk.Text(send, height=5, wrap="word")
@@ -385,11 +539,13 @@ class TransferMixin:
         r = ttk.Frame(send)
         r.pack(fill="x", padx=8, pady=(0, 8))
         ttk.Button(r, text="Send to Phone", style="Accent.TButton", command=self._safe(self._send_text_to_phone)).pack(side="left")
-        self.send_text_status = tk.StringVar(value="")
+        self.send_text_status = ui_helpers.StampedVar(value="")
         ttk.Label(r, textvariable=self.send_text_status, style="Muted.TLabel").pack(side="left", padx=10)
 
         for entry in self.server.text_store.list_to_laptop()[-60:]:
             self._add_text_row(entry)
+        for entry in self.server.text_store.list_sent_to_phone()[-60:]:
+            self._add_sent_text_row(entry)
         self.server.text_store.on_new_to_laptop(self._on_text_received_threadsafe)
 
     def _toggle_autocopy(self):
@@ -408,11 +564,15 @@ class TransferMixin:
         self.send_text_status.set(f"Sent {len(text)} characters - it appears on the phone page within seconds")
 
     def _add_text_row(self, entry: dict):
-        stamp = time.strftime("%H:%M:%S", time.localtime(entry["ts"]))
         first = entry["text"].replace("\n", " ")[:70]
         mark = "  [copied]" if entry.get("copied") else ""
-        self.text_listbox.insert(0, f"  {stamp}   {first}{mark}")
+        self.text_listbox.insert(0, f"  {fmt_dt(entry['ts'])}   {first}{mark}")
         self._text_entries.insert(0, entry)
+
+    def _add_sent_text_row(self, entry: dict):
+        first = entry["text"].replace("\n", " ")[:70]
+        self.sent_text_listbox.insert(0, f"  {fmt_dt(entry['ts'])}   {first}")
+        self._sent_text_entries.insert(0, entry)
 
     def _on_text_received_threadsafe(self, entry: dict):
         def add():
@@ -429,6 +589,15 @@ class TransferMixin:
         self.text_preview.configure(state="normal")
         self.text_preview.delete("1.0", "end")
         self.text_preview.insert("1.0", self._text_entries[sel[0]]["text"])
+        self.text_preview.configure(state="disabled")
+
+    def _on_sent_text_select(self):
+        sel = self.sent_text_listbox.curselection()
+        if not sel:
+            return
+        self.text_preview.configure(state="normal")
+        self.text_preview.delete("1.0", "end")
+        self.text_preview.insert("1.0", self._sent_text_entries[sel[0]]["text"])
         self.text_preview.configure(state="disabled")
 
     def _selected_text(self):
@@ -457,11 +626,13 @@ class TransferMixin:
             log.info("Saved a text to %s (%d characters)", path, len(t))
 
     def _clear_text_history(self):
-        if messagebox.askyesno("Clear the list?", "This clears the list in this window.\n"
+        if messagebox.askyesno("Clear the lists?", "This clears the lists in this window AND the 'Text from laptop' list on the phone page.\n"
                                                   "The saved text files in ReceivedText stay on disk.\n\nContinue?"):
             n = self.server.text_store.clear()
             self.text_listbox.delete(0, "end")
             self._text_entries.clear()
+            self.sent_text_listbox.delete(0, "end")
+            self._sent_text_entries.clear()
             self.text_preview.configure(state="normal")
             self.text_preview.delete("1.0", "end")
             self.text_preview.configure(state="disabled")

@@ -96,19 +96,117 @@ def list_devices(adb_path: str) -> tuple:
     return True, ready, "; ".join(notes)
 
 
-def push(adb_path, local_path, remote_path, progress_cb=None) -> tuple:
-    return _run_transfer([adb_path, "push", local_path, remote_path], progress_cb,
+def _base(adb_path: str, serial: str = None) -> list:
+    return [adb_path] + (["-s", serial] if serial else [])
+
+
+def push(adb_path, local_path, remote_path, progress_cb=None, serial=None) -> tuple:
+    return _run_transfer(_base(adb_path, serial) + ["push", local_path, remote_path], progress_cb,
                          f"push '{local_path}' -> '{remote_path}'")
 
 
-def pull(adb_path, remote_path, local_path, progress_cb=None) -> tuple:
+def pull(adb_path, remote_path, local_path, progress_cb=None, serial=None) -> tuple:
     """`local_path` is always a destination FOLDER (the GUI uses a folder picker)."""
     try:
         Path(local_path).mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return False, f"Cannot create destination folder: {exc}"
-    return _run_transfer([adb_path, "pull", remote_path, local_path], progress_cb,
+    return _run_transfer(_base(adb_path, serial) + ["pull", remote_path, local_path], progress_cb,
                          f"pull '{remote_path}' -> '{local_path}'")
+
+
+# ---------------------------------------------------------------------- #
+# Laptop -> phone gallery (so Instagram/Gallery pickers can see the files)
+# ---------------------------------------------------------------------- #
+_MEDIA_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".bmp", ".mp4", ".mkv", ".mov", ".avi",
+              ".webm", ".3gp", ".m4v", ".mp3", ".m4a", ".wav", ".aac", ".ogg", ".flac", ".opus"}
+
+
+def is_media(path: str) -> bool:
+    return Path(path).suffix.lower() in _MEDIA_EXT
+
+
+def ensure_remote_dir(adb_path: str, remote_dir: str, serial: str = None) -> None:
+    try:
+        _run(_base(adb_path, serial) + ["shell", "mkdir", "-p", f"'{remote_dir}'"], timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log.warning("Could not create %s on the phone: %s", remote_dir, exc)
+
+
+def scan_media(adb_path: str, remote_path: str, serial: str = None) -> bool:
+    """Ask Android to index a pushed file so galleries/pickers show it. Several methods are tried
+    because Android versions differ; each result is logged."""
+    base = _base(adb_path, serial)
+    attempts = [
+        ["shell", "content", "call", "--uri", "content://media/", "--method", "scan_file", "--arg", remote_path],
+        ["shell", "am", "broadcast", "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d", f"file://{remote_path}"],
+    ]
+    for args in attempts:
+        try:
+            r = _run(base + args, timeout=20)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            log.warning("Media scan command failed to run: %s", exc)
+            continue
+        out = (r.stdout + r.stderr).strip().replace("\n", " ")[:200]
+        log.debug("Media scan (%s) -> rc=%s %s", args[2] if args[1] == "content" else "broadcast", r.returncode, out)
+        if r.returncode == 0 and "error" not in out.lower() and "exception" not in out.lower():
+            return True
+    log.warning("Android did not confirm indexing of %s - the file is on the phone but may appear in the "
+                "gallery only after a restart or a media rescan", remote_path)
+    return False
+
+
+def push_to_phone(adb_path: str, files: list, gallery_dir: str, docs_dir: str, serial: str = None,
+                  status_cb=None) -> list:
+    """Push each file: photos/videos/audio -> gallery_dir (indexed), everything else -> docs_dir.
+    Returns [(local_path, remote_path or None, message)]."""
+    say = status_cb or (lambda m: None)
+    results = []
+    for d in {gallery_dir, docs_dir}:
+        ensure_remote_dir(adb_path, d, serial)
+    for i, f in enumerate(files, 1):
+        name = Path(f).name
+        target_dir = gallery_dir if is_media(f) else docs_dir
+        remote = f"{target_dir.rstrip('/')}/{name}"
+        say(f"Sending {i}/{len(files)}: {name} ...")
+        ok, out = push(adb_path, f, remote, serial=serial)
+        if not ok:
+            results.append((f, None, out))
+            continue
+        scanned = scan_media(adb_path, remote, serial) if is_media(f) else True
+        results.append((f, remote, "sent" + ("" if scanned else " (gallery refresh not confirmed)")))
+    return results
+
+
+# ---------------------------------------------------------------------- #
+# mDNS health (QR pairing needs it)
+# ---------------------------------------------------------------------- #
+def mdns_check(adb_path: str) -> tuple:
+    """-> (works, message). Windows adb sometimes has no mDNS backend; QR pairing cannot work then."""
+    try:
+        r = _run([adb_path, "mdns", "check"], timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"adb mdns check failed: {exc}"
+    text = (r.stdout + r.stderr).strip()
+    log.info("adb mdns check: %s", text.replace("\n", " | ")[:300])
+    low = text.lower()
+    if "unavailable" in low or "error" in low or "not " in low and "running" in low:
+        return False, text
+    return True, text
+
+
+def pair_with_code(adb_path: str, address: str, code: str) -> tuple:
+    """`adb pair ip:port code` - Wireless debugging > 'Pair device with pairing code' shows both."""
+    address, code = address.strip(), code.strip()
+    if not re.match(r"^[\w.\-\[\]:]+:\d{2,5}$", address) or not re.match(r"^\d{6}$", code):
+        return False, "Enter the pairing address as ip:port and the 6-digit code shown on the phone."
+    try:
+        r = _run([adb_path, "pair", address, code], timeout=40)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"adb pair failed: {exc}"
+    text = (r.stdout + r.stderr).strip()
+    log.info("adb pair %s: %s", address, text)
+    return "Successfully paired" in text, text or "no answer"
 
 
 def _run_transfer(cmd: list, progress_cb, description: str) -> tuple:

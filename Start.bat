@@ -16,6 +16,7 @@ set "TMP=%~dp0temp"
 set "UV_CACHE_DIR=%~dp0.uv\cache"
 set "UV_PYTHON_INSTALL_DIR=%~dp0.uv\python"
 set "UV_LINK_MODE=copy"
+set "UV_COMPILE_BYTECODE=1"
 if not exist "%~dp0temp" mkdir "%~dp0temp"
 
 echo [%date% %time%] Starting Phone-Laptop Transfer

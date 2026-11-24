@@ -128,7 +128,7 @@ def find_tailscale(configured: str = ""):
     return None
 
 
-def _run(args, timeout=8) -> tuple:
+def _run(args, timeout=20) -> tuple:
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         r = subprocess.run(args, capture_output=True, timeout=timeout, creationflags=flags)
@@ -141,21 +141,33 @@ def _run(args, timeout=8) -> tuple:
             r.stderr.decode("utf-8", "replace"))
 
 
+def _compact(text: str, n: int = 200) -> str:
+    return " ".join((text or "").split())[:n]
+
+
 def detect(exe: str, local_port: int):
-    """Returns (result, raw_note). result = (url, is_funnel) or None."""
+    """-> (result, note, reliable).
+    result = (url, is_funnel) or None.
+    reliable=False means the Tailscale command timed out / failed, so 'nothing found' must NOT be believed
+    (the logs showed the link flipping to 'not published' for ~15 s every hour when the CLI was slow)."""
     rc, out, err = _run([exe, "serve", "status", "--json"])
     if rc == 0:
         res = parse_serve_json(out, local_port)
         if res:
-            return res, "serve status --json"
-    notes = [f"serve --json rc={rc}: {(out or err).strip()[:300]}"]
+            return res, "serve status --json", True
+        if out.strip().startswith("{"):          # valid answer, our port just isn't in it
+            return None, f"serve --json rc=0: {_compact(out)}", True
+    notes = [f"serve --json rc={rc}: {_compact(out or err)}"]
+    reliable = False
     for sub in ("funnel", "serve"):
         rc2, out2, err2 = _run([exe, sub, "status"])
-        res = parse_status_text(out2 + "\n" + err2, local_port)
-        if res:
-            return res, f"{sub} status (text)"
-        notes.append(f"{sub} status rc={rc2}: {(out2 or err2).strip()[:300]}")
-    return None, " | ".join(notes)
+        if rc2 == 0:
+            reliable = True
+            res = parse_status_text(out2 + "\n" + err2, local_port)
+            if res:
+                return res, f"{sub} status (text)", True
+        notes.append(f"{sub} status rc={rc2}: {_compact(out2 or err2)}")
+    return None, " | ".join(notes), reliable
 
 
 # ---------------------------------------------------------------------- #
@@ -181,6 +193,8 @@ class PublicUrlWatcher:
         self._exe_checked_at = 0.0
         self._last_note = None
         self._warned_missing = False
+        self._unreliable = 0          # consecutive checks where Tailscale did not answer in time
+        self._wait = interval
 
     def on_change(self, cb):
         self._callbacks.append(cb)
@@ -219,7 +233,7 @@ class PublicUrlWatcher:
                 self._check_once()
             except Exception:
                 log.error("Public URL check crashed (will retry)", exc_info=True)
-            self._kick.wait(self.interval)
+            self._kick.wait(self._wait)
             self._kick.clear()
 
     def _manual_state(self, why: str):
@@ -250,10 +264,21 @@ class PublicUrlWatcher:
         if not self._exe:
             return self._manual_state("Tailscale not found on this PC")
 
-        res, note = detect(self._exe, port)
+        res, note, reliable = detect(self._exe, port)
         if not res and note != self._last_note:
-            log.debug("Tailscale detection note (nothing published for port %s): %s", port, note)
+            log.debug("Tailscale detection note (%s for port %s): %s",
+                      "nothing published" if reliable else "NO ANSWER", port, note[:400])
         self._last_note = note
+        if not res and not reliable:
+            # Tailscale was slow/busy. Keep showing the last known link instead of flipping to "not published".
+            self._unreliable += 1
+            self._wait = 10
+            if self._unreliable in (1, 6):
+                log.warning("Tailscale did not answer in time (%d in a row) - keeping the last known public link%s",
+                            self._unreliable, "" if self.state["url"] else " (there is none yet)")
+            return
+        self._unreliable = 0
+        self._wait = 30 if (res and res[1]) else self.interval     # relaxed polling once the link is live
         if res:
             url, is_funnel = res
             self._set(url=url, is_funnel=is_funnel, source="auto",

@@ -39,19 +39,45 @@ DEFAULTS = {
     # Text sent from the phone over the LOCAL Wi-Fi is copied to the laptop
     # clipboard automatically (never for internet/public-link visitors).
     "auto_copy_text": True,
+    # Where auto-copy applies: "everywhere" (local Wi-Fi AND the public/internet link), "wifi" (local only), "off".
+    # With "everywhere" and NO access PIN, anyone who has your public link could replace your clipboard - turn the PIN on.
+    "auto_copy_text_scope": "everywhere",
     # ---- GUI behaviour ----
     "right_click_pastes": True,
     "last_tab": "transfer",
+    # ---- look & layout (Settings > Appearance) ----
+    "ui_show_log": True,              # show the live log panel under the pages
+    "ui_hidden_pages": [],            # sidebar pages you chose to hide
+    "ui_gradient": "Aurora",          # header colours
+    "ui_text_size": "Normal",         # Small / Normal / Large (applies after restart)
+    # ---- Clip Shelf (small always-on-top window) ----
+    "shelf_enabled": True,            # open the shelf automatically with the tool
+    "shelf_w": 300, "shelf_h": 380, "shelf_x": -1, "shelf_y": -1,    # -1 = place it at the right edge of the screen
+    "shelf_opacity": 0.96,
+    "shelf_font_size": 10,
+    "shelf_topmost": True,
+    "shelf_noactivate": True,         # clicking the shelf does not take keyboard focus from the app you are typing in
+    "shelf_dblclick": "paste",        # paste = copy + press Ctrl+V in the active app;  copy = clipboard only
+    "shelf_copy_files": False,        # False = remember where a file is (no duplicate); True = keep a private copy
+    "shelf_collapsed": False,
+    "shelf_hotkey_toggle": "ctrl+alt+v",   # show / hide the shelf from anywhere
+    "shelf_hotkey_add": "ctrl+alt+c",      # save whatever is on the clipboard into the shelf
+
     # ---- tools ----
     "adb_path": "adb",
     "syncthing_path": "syncthing",
     "syncthing_web_ui": "http://127.0.0.1:8384",
     "scrcpy_path": "scrcpy",
-    "scrcpy_max_size": 800,
-    "scrcpy_bitrate_mbps": 4,
-    "scrcpy_max_fps": 30,
+    # Mirror quality defaults to MAXIMUM: native phone resolution (0 = no limit), 40 Mbps, 60 fps.
+    "scrcpy_max_size": 0,
+    "scrcpy_bitrate_mbps": 40,
+    "scrcpy_max_fps": 60,
+    "scrcpy_quality_version": 2,
     "scrcpy_turn_screen_off": False,
     "uxplay_path": "",                # optional AirPlay receiver for iPhone mirroring (same Wi-Fi)
+    # Where files go on the phone: photos/videos land in the gallery folder (shown in Instagram/Gallery pickers).
+    "phone_gallery_dir": "/sdcard/DCIM/PLT",
+    "phone_docs_dir": "/sdcard/Download/PLT",
     # ---- public access (Tailscale Funnel) ----
     "tailscale_publisher_path": r"D:\Tools\tailscale-publisher\PUBLISH-TOOL.bat",
     "tailscale_exe": "",              # blank = auto-find (PATH + usual install folders)
@@ -87,6 +113,12 @@ def redacted(cfg: dict) -> dict:
 
 def data_dir() -> Path:
     d = BASE_DIR / "data"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def shelf_dir() -> Path:
+    d = BASE_DIR / "ShelfFiles"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -127,10 +159,20 @@ def load_config() -> dict:
         if not isinstance(cfg, dict):
             raise ValueError("config.json is not a JSON object")
         changed = False
+        old_quality = int(cfg.get("scrcpy_quality_version", 0))   # read BEFORE the defaults are back-filled
         for k, v in DEFAULTS.items():
             if k not in cfg:
                 cfg[k] = v
                 changed = True
+        # v2.1: mirror quality now defaults to MAXIMUM (the old 800 px / 4 Mbps / 30 fps looked blurry,
+        # and even 1200 px is only half of a 2400x1080 screen). Applied once; change it freely afterwards.
+        if old_quality < 2:
+            cfg["scrcpy_max_size"], cfg["scrcpy_bitrate_mbps"], cfg["scrcpy_max_fps"] = 0, 40, 60
+            cfg["scrcpy_quality_version"] = 2
+            changed = True
+        if cfg.get("startup_mode") not in ("ask", "gui", "web"):
+            cfg["startup_mode"] = "ask"      # a blank value crashed the tool at start-up once
+            changed = True
         if changed:
             save_config(cfg)
     except (json.JSONDecodeError, OSError, ValueError):

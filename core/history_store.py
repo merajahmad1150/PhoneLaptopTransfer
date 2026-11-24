@@ -28,6 +28,12 @@ KIND_TEXT_TO_LAPTOP = "text_to_laptop"
 KIND_TEXT_TO_PHONE = "text_to_phone"
 KIND_FILE_FROM_PHONE = "file_from_phone"
 KIND_FILE_TO_PHONE = "file_to_phone"
+KIND_FILE_ADB = "file_adb_to_phone"      # sent with ADB (USB/wireless) into the phone gallery/folders
+
+# "Clear" scopes: hiding history from one place never deletes saved data
+SCOPE_GUI = "gui"                 # lists in the desktop window / web control panel
+SCOPE_PHONE_TEXTS = "phone_texts" # "Text from laptop" list on the phone page
+SCOPE_PHONE_FILES = "phone_files" # "Get from laptop" list on the phone page
 
 
 class HistoryStore:
@@ -36,7 +42,8 @@ class HistoryStore:
         self.text_dir = Path(text_dir)
         self._lock = threading.RLock()
         self._entries = []
-        self._cleared_upto = 0   # entries with id <= this are hidden in the GUI lists
+        self._cleared = {}       # scope -> entries with id <= this are hidden in that place
+        self._listeners = []
         self._max_id = 0
         self._load()
         self._counter = itertools.count(self._max_id + 1)
@@ -59,7 +66,8 @@ class HistoryStore:
                         bad += 1
                         continue
                     if obj.get("kind") == "clear":
-                        self._cleared_upto = max(self._cleared_upto, int(obj.get("upto_id", 0)))
+                        scope = obj.get("scope", SCOPE_GUI)      # old v2.0 markers had no scope = GUI lists
+                        self._cleared[scope] = max(self._cleared.get(scope, 0), int(obj.get("upto_id", 0)))
                         continue
                     self._entries.append(obj)
                     self._max_id = max(self._max_id, int(obj.get("id", 0)))
@@ -96,10 +104,21 @@ class HistoryStore:
             self._append_line(entry)
         if kind in (KIND_TEXT_TO_LAPTOP, KIND_TEXT_TO_PHONE):
             self._write_text_file(entry)
+        for cb in list(self._listeners):
+            try:
+                cb(entry)
+            except Exception:
+                log.error("A history listener raised an error", exc_info=True)
         return entry
 
-    def list(self, kinds=None, since_id: int = 0, visible_hours: float = 0, include_cleared: bool = True) -> list:
-        """Entries oldest->newest. visible_hours>0 hides older ones (phone page)."""
+    def add_listener(self, callback) -> None:
+        """callback(entry) is called (from any thread) whenever something is recorded."""
+        self._listeners.append(callback)
+
+    def list(self, kinds=None, since_id: int = 0, visible_hours: float = 0, include_cleared: bool = True,
+             scope: str = SCOPE_GUI) -> list:
+        """Entries oldest->newest. visible_hours>0 hides older ones (phone page).
+        include_cleared=False hides what was cleared in `scope`."""
         cutoff = time.time() - visible_hours * 3600 if visible_hours and visible_hours > 0 else 0
         with self._lock:
             out = []
@@ -110,7 +129,7 @@ class HistoryStore:
                     continue
                 if cutoff and e["ts"] < cutoff:
                     continue
-                if not include_cleared and e["id"] <= self._cleared_upto:
+                if not include_cleared and e["id"] <= self._cleared.get(scope, 0):
                     continue
                 out.append(e)
             return out
@@ -122,16 +141,22 @@ class HistoryStore:
                     return e
         return None
 
-    def clear_visible(self) -> int:
-        """Hide everything currently in the GUI lists (data stays on disk)."""
+    def clear_scope(self, scope: str) -> int:
+        """Hide everything recorded so far in one place (data stays on disk). Returns how many items were hidden."""
         with self._lock:
-            n = len([e for e in self._entries if e["id"] > self._cleared_upto])
-            self._cleared_upto = self._max_id_locked()
-            self._append_line({"kind": "clear", "upto_id": self._cleared_upto, "ts": time.time()})
+            before = self._cleared.get(scope, 0)
+            upto = max((e["id"] for e in self._entries), default=before)
+            n = len([e for e in self._entries if before < e["id"] <= upto])
+            self._cleared[scope] = upto
+            self._append_line({"kind": "clear", "scope": scope, "upto_id": upto, "ts": time.time()})
         return n
 
-    def _max_id_locked(self) -> int:
-        return max((e["id"] for e in self._entries), default=self._cleared_upto)
+    def clear_visible(self) -> int:           # kept for older callers
+        return self.clear_scope(SCOPE_GUI)
+
+    def cleared_upto(self, scope: str) -> int:
+        with self._lock:
+            return self._cleared.get(scope, 0)
 
     def counts(self) -> dict:
         with self._lock:

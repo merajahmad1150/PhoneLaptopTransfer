@@ -13,7 +13,7 @@ room_manager.ROOMS_DIR = tmp / "rooms"
 
 cfg = dict(config.DEFAULTS)
 cfg.update(download_folder=str(tmp/"recv"), share_folder=str(tmp/"share"), text_folder=str(tmp/"texts"),
-           rooms_enabled=True, auto_detect_public_url=False, access_pin="123456")
+           rooms_enabled=True, auto_detect_public_url=False, access_pin="123456", auto_copy_text_scope="wifi")
 for k in ("download_folder","share_folder","text_folder"): Path(cfg[k]).mkdir(parents=True, exist_ok=True)
 hist = HistoryStore(tmp/"data", Path(cfg["text_folder"])); (tmp/"data").mkdir(exist_ok=True)
 srv = web_server.TransferServer(cfg, history=hist)
@@ -121,5 +121,53 @@ for i in range(30): c.get(f"/x{i}", environ_overrides={"REMOTE_ADDR":"192.168.1.
 ok(c.get("/", environ_overrides={"REMOTE_ADDR":"192.168.1.50"}).status_code==200, "local devices are never blocked")
 import qr_helper
 img = qr_helper.make_qr_image("https://example.com", target_px=360); ok(img.width>=300 and img.width<=360, f"QR scaled crisply ({img.width}px)")
+# --- v2.1: clear scopes, timestamps, dedupe, .part files, download timing ---
+from history_store import SCOPE_PHONE_TEXTS
+srv.text_store.add_to_phone("laptop says 1"); srv.text_store.add_to_phone("laptop says 2")
+j = c.get("/text/to-phone").get_json(); ok(len(j["texts"])>=2 and all("ts" in t for t in j["texts"]), "phone texts carry a timestamp")
+r = c.post("/text/clear"); ok(r.get_json()["ok"], "phone 'Clear' button works")
+j = c.get("/text/to-phone").get_json(); ok(j["texts"]==[] and j["cleared_upto"]>0, "phone text list is empty after clear and reports cleared_upto")
+srv.text_store.add_to_phone("laptop says 3"); j = c.get("/text/to-phone").get_json(); ok([t["text"] for t in j["texts"]]==["laptop says 3"], "new texts after a clear still arrive")
+ok(len(srv.history.list(["text_to_phone"]))>=3, "cleared texts remain saved in the history")
+srv.text_store.clear(); ok(c.get("/text/to-phone").get_json()["texts"]==[], "clearing in the desktop window also clears the phone page (the reported bug)")
+(Path(cfg["share_folder"])/"a.bin").write_bytes(b"1"); (Path(cfg["share_folder"])/"b.bin.part").write_bytes(b"2")
+names = [f["name"] for f in c.get("/files").get_json()["files"]]; ok("a.bin" in names and "b.bin.part" not in names, "half-copied .part files are not offered to the phone")
+e = srv._share_index["a.bin"]; srv.register_shared_file(Path(cfg["share_folder"])/"a.bin")
+ok(len([x for x in srv.history.list(["file_to_phone"]) if x["name"]=="a.bin"])==1, "same file registered twice within seconds is recorded once (duplicate history bug)")
+r = c.post("/files/clear"); ok(c.get("/files").get_json()["files"]==[], "phone file list 'Clear list' works")
+ok((Path(cfg["share_folder"])/"a.bin").exists(), "...and the file itself is untouched")
+import logging, io
+buf = io.StringIO(); h = logging.StreamHandler(buf); logging.getLogger("transfer").addHandler(h)
+(Path(cfg["share_folder"])/"big.bin").write_bytes(os.urandom(2*1024*1024)); srv.register_shared_file(Path(cfg["share_folder"])/"big.bin")
+d = c.get("/download/big.bin"); _ = d.data; d.close()
+ok("Finished sending 'big.bin'" in buf.getvalue(), "download log reports size, time and speed when it finishes")
+logging.getLogger("transfer").removeHandler(h)
+# config migration / validation
+import json as _json
+old = dict(config.DEFAULTS); old.pop("scrcpy_quality_version"); old.update(scrcpy_max_size=800, scrcpy_bitrate_mbps=4, scrcpy_max_fps=30, startup_mode="")
+config.CONFIG_PATH = tmp/"cfg.json"; config.save_config(old); newcfg = config.load_config()
+ok((newcfg["scrcpy_max_size"], newcfg["scrcpy_bitrate_mbps"], newcfg["scrcpy_max_fps"])==(0,40,60) and newcfg["startup_mode"]=="ask", "old mirror quality migrated to MAXIMUM; blank start-up mode repaired")
+import scrcpy_helper, adb_helper
+args = scrcpy_helper.build_args("scrcpy", newcfg, "SER"); ok("--max-size" not in args and "40M" in args and "60" in args and "--push-target=/sdcard/DCIM/PLT/" in args, f"scrcpy runs at native resolution: {' '.join(args)}")
+cfg2 = dict(newcfg, scrcpy_max_size=1200); ok("--max-size" in scrcpy_helper.build_args("scrcpy", cfg2), "a size limit is passed only when set")
+calls = []
+adb_helper._run = lambda cmd, timeout=None: (calls.append(cmd) or type("R", (), {"returncode": 0, "stdout": "Result: Bundle[{}]", "stderr": ""})())
+adb_helper._run_transfer = lambda cmd, cb, desc: (calls.append(cmd) or (True, "1 file pushed"))
+res = adb_helper.push_to_phone("adb", ["/x/movie.mp4", "/x/doc.pdf"], "/sdcard/DCIM/PLT", "/sdcard/Download/PLT", "SER")
+pushed = [c_ for c_ in calls if "push" in c_]
+ok(res[0][1]=="/sdcard/DCIM/PLT/movie.mp4" and res[1][1]=="/sdcard/Download/PLT/doc.pdf", "videos go to the gallery folder, documents to Downloads")
+ok(any("scan_file" in c_ for c_ in calls) and all("-s" in p and "SER" in p for p in pushed), "gallery refresh requested; device serial respected")
+# --- v2.2: auto-copy from the internet link ---
+copied.clear()
+srv.cfg["auto_copy_text_scope"] = "everywhere"
+r = c.post("/text/to-laptop", json={"text":"from my phone on mobile data"}, headers={"X-Forwarded-For":"1.2.3.4","X-Forwarded-Proto":"https"}, environ_overrides={"REMOTE_ADDR":"127.0.0.1"})
+ok(r.get_json()["copied"] is True and copied==["from my phone on mobile data"], "text sent over the internet link IS copied to the clipboard (scope everywhere)")
+copied.clear(); srv.cfg["auto_copy_text_scope"] = "wifi"
+r = c.post("/text/to-laptop", json={"text":"internet again"}, headers={"X-Forwarded-For":"1.2.3.4"}, environ_overrides={"REMOTE_ADDR":"127.0.0.1"})
+ok(r.get_json()["copied"] is False, "scope 'wifi' keeps the old behaviour")
+r = c.post("/text/to-laptop", json={"text":"lan"}, environ_overrides={"REMOTE_ADDR":"192.168.1.77"}); ok(r.get_json()["copied"] is True, "...and Wi-Fi text still copies")
+srv.cfg["auto_copy_text_scope"] = "off"
+r = c.post("/text/to-laptop", json={"text":"lan2"}, environ_overrides={"REMOTE_ADDR":"192.168.1.77"}); ok(r.get_json()["copied"] is False, "scope 'off' copies nothing")
+srv.cfg["auto_copy_text_scope"] = "everywhere"
 print("\nALL SERVER TESTS PASSED")
 L.end_session("tests")

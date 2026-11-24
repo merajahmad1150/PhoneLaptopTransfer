@@ -96,6 +96,8 @@ def _install_console_handler(log, server):
 
 
 def main() -> int:
+    import time as _time
+    t_begin = _time.perf_counter()
     _set_console_title()
     ap = argparse.ArgumentParser(description=APP_NAME)
     ap.add_argument("--mode", choices=["gui", "web"], help="skip the start-up question")
@@ -108,7 +110,9 @@ def main() -> int:
     log = logger.setup_logging(logs_dir(), keep_sessions=int(cfg.get("log_keep_sessions", 500)))
     log.info("Configuration: %s", redacted(cfg))
 
+    t_cfg = _time.perf_counter()
     missing = _check_dependencies()
+    t_deps = _time.perf_counter()
     if missing:
         log.critical("Missing Python packages: %s  - run Start.bat again (it installs them with uv)", ", ".join(missing))
         print("\nMISSING PACKAGES: " + ", ".join(missing) + "\nRun Start.bat again - it installs them automatically with uv.")
@@ -121,13 +125,19 @@ def main() -> int:
     from web_server import TransferServer
     server = TransferServer(cfg)
     room_manager.purge_orphans()
+    t_server = _time.perf_counter()
+    log.info("Start-up timing: config %.1fs | packages %.1fs | server %.1fs (a slow first start after a reboot is "
+             "usually the disk or antivirus scanning the packages)", t_cfg - t_begin, t_deps - t_cfg, t_server - t_deps)
 
     mode = args.mode or cfg.get("startup_mode", "ask")
+    if mode not in ("ask", "gui", "web"):
+        log.warning("startup_mode %r is not valid (use ask, gui or web) - using 'ask'", mode)
+        mode = "ask"
     root = None
     if mode in ("ask", "gui"):
         try:
-            import tkinter as tk
-            root = tk.Tk()
+            import dnd
+            root, _dnd_ok = dnd.make_root()
             root.withdraw()
         except Exception as exc:
             log.error("The desktop window (Tk) could not start: %s - switching to web mode", exc, exc_info=True)
@@ -159,9 +169,21 @@ def main() -> int:
     _install_console_handler(log, server)
     from main_window import MainWindow
     root.deiconify()
-    MainWindow(root, cfg, save_config, server)
+    t_win = _time.perf_counter()
+    window = MainWindow(root, cfg, save_config, server)
+    log.info("Main window built in %.1fs; memory now %.0f MB", _time.perf_counter() - t_win, logger.process_memory_mb())
     log.info("Entering the main loop")
-    root.mainloop()
+    while True:
+        try:
+            root.mainloop()
+            break
+        except KeyboardInterrupt:          # safety net: never end with a crash report
+            log.info("Ctrl+C reached the main loop - closing the window cleanly")
+            try:
+                window._on_close()
+            except Exception:
+                log.error("Clean close after Ctrl+C failed", exc_info=True)
+            break
     log.info("Main loop ended")
     return 0
 
@@ -172,6 +194,8 @@ if __name__ == "__main__":
         code = main()
     except SystemExit as e:
         code = e.code if isinstance(e.code, int) else 0
+    except KeyboardInterrupt:
+        code = 0
     except BaseException:
         code = 1
         try:
