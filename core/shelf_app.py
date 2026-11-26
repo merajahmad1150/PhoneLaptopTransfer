@@ -29,10 +29,8 @@ def main() -> int:
         print("The Clip Shelf is already running.")
         return 0
     import dnd
-    import theme
     root, _ = dnd.make_root()
     root.withdraw()
-    theme.apply_theme(root)
     from shelf_window import ClipShelf
 
     def send_file(path):          # standalone: drop a copy in the share folder; the server (if running) picks it up

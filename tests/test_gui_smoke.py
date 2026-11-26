@@ -25,7 +25,8 @@ class Fake:
         if name == "cget": return lambda *a: "normal"
         if name == "get": return lambda *a: ""
         if name == "size": return lambda: 0
-        if name in ("winfo_x", "winfo_y"): return lambda: 100
+        if name in ("winfo_x", "winfo_y", "winfo_rooty", "winfo_rootx"): return lambda: 100
+        if name == "bbox": return lambda *a: (0, 0, 2000, 2000)
         if name == "winfo_height": return lambda: 380
         if name == "nearest": return lambda *a: 0
         if name == "winfo_pointerx": return lambda: 500
@@ -123,6 +124,21 @@ ev = type("E", (), dict(x=1, y=1, x_root=1, y_root=1))()
 sh._context_menu(ev); sh._main_menu(); sh._add_menu(); sh._drag_payload(ev); sh.collapse(); sh.expand(); sh.toggle(); sh.toggle()
 sh._set("shelf_opacity", 0.8); sh._set("shelf_font_size", 11); sh._reset_geometry(); sh._poll()
 sh.lb.curselection = lambda: (0,); sh.delete_selected()
+# drag OUT of the tool's lists (tkinterdnd2 events only carry x_root/y_root - no .x/.y) and drops on the collapsed tab
+dnd_ev = type("DnDEvent", (), dict(x_root=5, y_root=105))()
+win.received_listbox.size = lambda: 1
+win._received_paths[:] = [tmp/"r"/"x.txt"]
+assert win._drag_file_payload(win.received_listbox, dnd_ev, win._received_paths) == ("files", [str(tmp/"r"/"x.txt")]), "received file cannot be dragged out"
+win._text_entries[:] = [{"text": "hello drag", "ts": 1}]; win.text_listbox.size = lambda: 1
+assert win._drag_text_payload(win.text_listbox, dnd_ev, win._text_entries) == ("text", "hello drag"), "text cannot be dragged out"
+assert win._drag_file_payload(win.received_listbox, dnd_ev, [None]) is None, "a phone-side (ADB) file must not be draggable"
+sh.size = None
+sh.lb.size = lambda: 1; sh._rows[:] = [sh.store.items[0]["id"]]
+assert sh._drag_payload(dnd_ev) is not None, "shelf item cannot be dragged out"
+sh.collapse(); sh._tab_hover(True); sh._tab_drop_text("dropped while collapsed"); sh._tab_drop_files([str(tmp/"r"/"x.txt")]); sh._tab_hover(False)
+assert any(i.get("text") == "dropped while collapsed" for i in sh.store.items), "drop on the collapsed tab was not saved"
+n_before = len(sh.store.items); sh.add_text("dropped while collapsed"); assert len(sh.store.items) == n_before, "duplicate text should be moved to the top, not added again"
+sh.expand()
 # drops + screenshot paste
 win.current_page = "transfer"; win._on_drop_files([str(tmp/"r"/"x.txt")]); win._on_drop_text("dropped words")
 shot = Image.new("RGB", (64, 48), (10, 120, 200)); clipboard_helper.grab_image_or_files = lambda: ("image", shot)
@@ -134,6 +150,7 @@ clipboard_helper.grab_image_or_files = lambda: (None, None); win._paste_clipboar
 win._apply_gradient(); win._apply_log_visibility(); win._apply_hidden_pages(); win._toggle_shelf(); win._toggle_shelf(); win._save_settings()
 win._run_self_test if False else None
 win._on_close()
+assert win._closing, "close did not run"
 assert saved, "config was not saved on close"
 # startup dialog + stub of ui_helpers key paths
 startup_dialog.choose_mode(tk.Tk(), "gui")

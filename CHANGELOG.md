@@ -130,7 +130,7 @@ it automatically; nothing is lost).
   Advanced.
 - **Start-up choice**: desktop window (GUI) or web control panel (`/admin`, local network only)
   - can be remembered; `--mode gui|web` on the command line. If Tk cannot start, the tool falls
-  back to web mode by itself.
+    back to web mode by itself.
 - **Web control panel** (`/admin`): status, QR codes, everything shared (with downloads of
   received files), send text/files to the phone, live log, clear history, quit.
 - **Screen Mirror page**: Android over USB, **Android wireless by scanning a QR code** (Wireless
@@ -414,3 +414,68 @@ footer), 4 more server checks, a self-test simulation, and the window smoke test
 the shelf, drops and screenshot paste. **Still needs your PC:** the real look of the shelf, drag
 and drop (needs `tkinterdnd2` installed by `Start.bat`), global hotkeys, no-focus-steal pasting,
 clipboard files/pictures. Please send the next log after trying them.
+
+
+---
+
+## v2.3.0 - November 26, 2026
+
+From your five new session logs (Nov 25) and your requests.
+
+### Your requests
+
+**1. Closing did not work.** The log showed `TclError: can't delete Tcl command` every time you
+closed the window; the program kept running until the console window was closed. **Cause:** the
+new hover-help code cancelled a waiting tooltip timer through the wrong widget, which left a
+stale entry behind, and closing then failed on it. **Fixed** at the source, and closing can no
+longer fail silently: if any widget ever refuses to be destroyed, the program writes the log
+footer and exits anyway.
+
+**2. Drag anything into the shelf, even when it is minimised.** The collapsed tab is now bigger
+(24 x 110) and is a drop target: drop text or files on it and they are saved without opening the
+shelf. The tab shows **+** while you hover with something, a green **tick** when it is saved,
+and a red **!** if it could not be.
+
+**3. Drag out of the tool.** Received files, files you sent, and both text lists can be dragged
+into Explorer, a browser upload box, WhatsApp Web, a text box or the Clip Shelf. Double-click a
+sent file to open it. Files sent to the phone gallery with ADB live on the phone, so they cannot
+be dragged.
+
+**4. Log review.** See "Fixed from the logs".
+
+### Fixed from the logs
+
+**Dragging an item OUT of the shelf always failed** (`'DnDEvent' object has no attribute 'y'`,
+three times). The drag-and-drop engine reports screen coordinates only; the shelf and the lists
+now use those.
+
+**Slow start (5-10 s of "packages" before anything appeared).** Flask, waitress, qrcode and
+Pillow are now loaded in the background while the start-up dialog is on screen. The log shows
+how long loading took and how long you waited afterwards.
+
+**Screenshot paste failed once** (`OSError: failed to open clipboard`): the Snipping Tool was
+still holding the clipboard. Reading the clipboard now retries for up to a second, and a locked
+clipboard gives one clear warning instead of a traceback.
+
+**The same caption saved again and again** (26 characters added five times). Saving text that is
+already on the shelf now moves it to the top and says "Already saved".
+
+**Download log read "0.0 MB in 0.4 s = 0.1 MB/s"** for a 30 KB screenshot. Small files are now
+shown in KB.
+
+**Lower memory for `Start_Shelf.bat`.** It no longer loads the colour theme and its image
+library (39 MB before).
+
+### What the logs showed that needed no fix
+
+The main tool uses about 58-66 MB (65 MB steady over 16 hours), the shelf on its own 39 MB. The
+Tailscale link stayed live without flipping. The screenshot reached the phone page in 0.4 s.
+Hotkeys registered. Text from the phone was copied automatically. Your hidden pages, hidden log
+panel and shelf position were saved and restored.
+
+### Tests
+
+**New:** the tooltip close bug, drag events with only screen coordinates, dragging received
+files, texts and shelf items out, drops on the collapsed tab, and duplicate captions. All
+earlier tests still pass. **Still needs your PC:** dragging into other programs and closing the
+window. Please send the next log.

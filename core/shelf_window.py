@@ -32,7 +32,7 @@ log = get_logger()
 
 BG, HDR, BORDER = "#14112e", "#241e55", "#3b3480"
 TEXT, MUTED, SEL = "#f1efff", "#a39fd0", "#4a3fb5"
-TAB_W, TAB_H = 14, 64
+TAB_W, TAB_H = 24, 110        # the collapsed tab is big enough to drop things onto
 
 
 class ClipShelf:
@@ -127,13 +127,16 @@ class ClipShelf:
         tooltip.add_tooltip(grip, "Drag to resize the shelf.")
 
         # ---- collapsed tab
-        self.tab = tk.Label(w, text="\u2039", bg=HDR, fg=TEXT, cursor="hand2", font=("Segoe UI", 10, "bold"))
+        self._tab_char = "\u2039"
+        self.tab = tk.Label(w, text=self._tab_char, bg=HDR, fg=TEXT, cursor="hand2", font=("Segoe UI", 12, "bold"))
         self.tab.bind("<Button-1>", lambda e: self.expand())
-        tooltip.add_tooltip(self.tab, "Clip Shelf - click to open.")
+        tooltip.add_tooltip(self.tab, "Clip Shelf - click to open. You can also DROP text or files onto this tab to save them.")
 
         # ---- drag and drop
         for target in (self.lb, self.hdr, self.body):
             dnd.drop_target(target, files_cb=self.add_paths, text_cb=self.add_text)
+        # the collapsed tab accepts drops too, so anything can be dragged in without opening the shelf
+        dnd.drop_target(self.tab, files_cb=self._tab_drop_files, text_cb=self._tab_drop_text, hover_cb=self._tab_hover)
         dnd.drag_source(self.lb, self._drag_payload)
         if not dnd.is_ready(self.win):                    # no drop engine: allow reordering by dragging inside the list
             self.lb.bind("<B1-Motion>", self._reorder_motion)
@@ -142,6 +145,25 @@ class ClipShelf:
         w.deiconify()
         if c.get("shelf_noactivate", True):
             win_helpers.set_noactivate(w, True)
+
+    # ---- collapsed tab as a drop target ----
+    def _tab_hover(self, on: bool):
+        if self._collapsed:
+            self.tab.configure(text="+" if on else self._tab_char, bg="#22d3b8" if on else HDR, fg="#06231f" if on else TEXT)
+
+    def _tab_done(self, ok: bool):
+        if not self._collapsed:
+            return
+        self.tab.configure(text="\u2713" if ok else "!", bg="#34d67a" if ok else "#ff6b6b", fg="#06231f")
+        self.win.after(900, lambda: self.tab.configure(text=self._tab_char, bg=HDR, fg=TEXT))
+
+    def _tab_drop_files(self, paths):
+        before = len(self.store.items)
+        self.add_paths(paths)
+        self._tab_done(len(self.store.items) > before)
+
+    def _tab_drop_text(self, text):
+        self._tab_done(bool(self.add_text(text)))
 
     def _hbtn(self, parent, text, command, tip, side):
         b = tk.Label(parent, text=text, bg=HDR, fg=TEXT, width=2, cursor="hand2", font=("Segoe UI", 10, "bold"))
@@ -222,7 +244,8 @@ class ClipShelf:
         sw, _ = self._screen()
         right = x + w / 2 > sw / 2
         self.body.pack_forget()
-        self.tab.configure(text="\u2039" if right else "\u203a")
+        self._tab_char = "\u2039" if right else "\u203a"
+        self.tab.configure(text=self._tab_char, bg=HDR)
         self.tab.pack(fill="both", expand=True)
         self.win.geometry(f"{TAB_W}x{TAB_H}+{sw - TAB_W if right else 0}+{y}")
         self._collapsed = True
@@ -312,6 +335,15 @@ class ClipShelf:
     # adding
     # ------------------------------------------------------------------ #
     def add_text(self, text: str):
+        text = (text or "").rstrip()
+        if not text.strip():
+            return None
+        same = next((i for i in self.store.items if i["kind"] == "text" and i["text"].strip() == text.strip()), None)
+        if same:                                   # the log showed the same caption saved again and again
+            self.store.move(same["id"], "top")
+            self.refresh(same["id"])
+            self._flash("Already saved - moved to top")
+            return same
         item = self.store.add_text(text)
         if item:
             self.refresh(item["id"])
@@ -489,7 +521,10 @@ class ClipShelf:
     # drag OUT
     # ------------------------------------------------------------------ #
     def _drag_payload(self, event):
-        idx = self.lb.nearest(event.y)
+        # tkinterdnd2's event has NO .y (the log showed AttributeError and every drag-out failed); use screen coordinates.
+        y_root = getattr(event, "y_root", None)
+        y = (y_root - self.lb.winfo_rooty()) if y_root is not None else (self.lb.winfo_pointery() - self.lb.winfo_rooty())
+        idx = self.lb.nearest(y)
         if not (0 <= idx < len(self._rows)):
             return None
         it = self.store.get(self._rows[idx])

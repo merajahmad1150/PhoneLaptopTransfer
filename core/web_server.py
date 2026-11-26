@@ -676,8 +676,9 @@ class TransferServer:
                 log.debug("%sRange request for '%s' from %s done: %.1f MB sent in %.1fs (Range: %s)",
                           prefix, name, ci["ip"], sent / MB, secs, rng)
             elif sent >= total:
-                log.info("%sFinished sending '%s' to %s: %.1f MB in %.1fs = %.1f MB/s",
-                         prefix, name, ci["ip"], total / MB, secs, total / MB / secs)
+                size_txt = f"{total / MB:.1f} MB" if total >= MB else f"{total / 1024:.1f} KB"
+                speed_txt = f"{total / MB / secs:.1f} MB/s" if total >= MB else f"{total / 1024 / secs:.0f} KB/s"
+                log.info("%sFinished sending '%s' to %s: %s in %.1fs = %s", prefix, name, ci["ip"], size_txt, secs, speed_txt)
             else:
                 log.warning("%sDownload of '%s' by %s STOPPED EARLY: %.1f of %.1f MB after %.1fs. The phone cancelled, "
                             "paused, or lost Wi-Fi (browsers usually resume with a new request).",

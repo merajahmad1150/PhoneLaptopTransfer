@@ -35,6 +35,9 @@ comment replies, documents, pictures, videos, mp3 and PDFs.
   shelf never steals keyboard focus (you can switch that off in its menu).
 - **Drag out / drag in:** drag any item into another program, or drag text and files from
   anywhere onto the shelf.
+- **Drop on the tab:** the collapsed tab accepts drops too, so you never have to open the shelf
+  first. It shows a **+** while you hover, a green tick when the item is saved, and a red **!**
+  if it could not be.
 - **Save things:** the **+** button, or the hotkey **Ctrl+Alt+C**, saves what is on the
   clipboard - text, a Win+Shift+S screenshot, or files you copied in Explorer.
 - **Organise:** right-click for Edit, Rename, Delete, Send to phone, and Move to top / middle /
@@ -56,6 +59,9 @@ Drop files or folders on the window: they go to the phone (folders are zipped). 
 Mirror page they go into the phone gallery. Text dropped on the window goes to the phone page.
 Take a screenshot with Win+Shift+S and press **Ctrl+V** in the tool (when you are not typing in
 a text box) or **Ctrl+Shift+V** anywhere.
+
+You can also drag **out** of the tool: received files, files you sent, and both text lists can
+be dragged into Explorer, a browser upload box, WhatsApp Web, a text box or the Clip Shelf.
 
 Dragging needs the small `tkinterdnd2` package; `Start.bat` installs it. If it is missing, the
 log says so and the buttons still work.

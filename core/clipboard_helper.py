@@ -165,9 +165,22 @@ def grab_image_or_files():
     A Win+Shift+S screenshot is an image; files copied in Explorer are a file list."""
     try:
         from PIL import ImageGrab
-        got = ImageGrab.grabclipboard()
     except Exception:
-        log.debug("Could not read an image from the clipboard", exc_info=True)
+        return None, None
+    got = None
+    for attempt in range(1, 9):
+        try:
+            got = ImageGrab.grabclipboard()
+            break
+        except OSError as exc:
+            # "failed to open clipboard": the Snipping Tool (or another program) is still holding it - wait a moment.
+            log.debug("Clipboard busy (attempt %d/8): %s", attempt, exc)
+            time.sleep(0.1)
+        except Exception:
+            log.debug("Could not read an image from the clipboard", exc_info=True)
+            return None, None
+    else:
+        log.warning("The clipboard stayed locked by another program - try again in a second")
         return None, None
     if got is None:
         return None, None

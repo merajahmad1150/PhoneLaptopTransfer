@@ -33,7 +33,7 @@ def is_ready(widget) -> bool:
     return hasattr(widget, "drop_target_register") and hasattr(widget, "dnd_bind")
 
 
-def drop_target(widget, files_cb=None, text_cb=None) -> bool:
+def drop_target(widget, files_cb=None, text_cb=None, hover_cb=None) -> bool:
     if not is_ready(widget):
         return False
     try:
@@ -57,7 +57,25 @@ def drop_target(widget, files_cb=None, text_cb=None) -> bool:
                 text_cb(data)
             return "copy"
 
-        widget.dnd_bind("<<Drop>>", on_drop)
+        def on_enter(event):
+            if hover_cb:
+                hover_cb(True)
+            return "copy"
+
+        def on_leave(event):
+            if hover_cb:
+                hover_cb(False)
+            return "copy"
+
+        def on_drop_done(event):
+            if hover_cb:
+                hover_cb(False)
+            return on_drop(event)
+
+        widget.dnd_bind("<<Drop>>", on_drop_done)
+        if hover_cb:
+            widget.dnd_bind("<<DropEnter>>", on_enter)
+            widget.dnd_bind("<<DropLeave>>", on_leave)
         return True
     except Exception:
         log.warning("Could not enable dropping on %s", widget, exc_info=True)
@@ -85,3 +103,25 @@ def drag_source(widget, payload_cb) -> bool:
     except Exception:
         log.warning("Could not enable dragging from %s", widget, exc_info=True)
         return False
+
+
+def row_at_pointer(listbox, event):
+    """Index of the list row under the mouse, or None. tkinterdnd2 drag events have no .x/.y, only screen
+    coordinates (x_root/y_root) - the shelf failed with "'DnDEvent' object has no attribute 'y'" because of that."""
+    try:
+        y_root = getattr(event, "y_root", None)
+        if y_root is None:
+            y_root = listbox.winfo_pointery()
+        y = y_root - listbox.winfo_rooty()
+        idx = listbox.nearest(y)
+        if not (0 <= idx < listbox.size()):
+            return None
+        box = listbox.bbox(idx)
+        if box and not (box[1] <= y <= box[1] + box[3]):
+            return None                        # pointer is in the empty space below the last row
+        listbox.selection_clear(0, "end")
+        listbox.selection_set(idx)
+        return idx
+    except Exception:
+        log.debug("Could not find the row being dragged", exc_info=True)
+        return None

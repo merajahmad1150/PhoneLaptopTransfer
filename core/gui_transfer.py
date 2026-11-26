@@ -47,6 +47,7 @@ class TransferMixin:
         tab = ui_helpers.make_scrollable(page)
         self._qr_photo = None
         self._received_paths = []
+        self._sent_entries = []
 
         status = ttk.LabelFrame(tab, text="Server")
         status.pack(fill="x", padx=12, pady=(10, 6))
@@ -110,8 +111,9 @@ class TransferMixin:
                                        selectforeground=theme.ON_ACCENT, relief="flat", highlightthickness=1,
                                        highlightbackground=theme.PANEL_BORDER, font=theme.FONT, activestyle="none")
         self.sent_listbox.pack(fill="x", padx=8, pady=8)
+        self.sent_listbox.bind("<Double-Button-1>", self._safe(lambda e: self._open_sent_file()))
 
-        recv = ttk.LabelFrame(tab, text="Received from phone  (double-click to open; time = when it arrived)")
+        recv = ttk.LabelFrame(tab, text="Received from phone  (double-click to open, DRAG a file out to any program; time = when it arrived)")
         recv.pack(fill="both", expand=True, padx=12, pady=(6, 12))
         r2 = ttk.Frame(recv)
         r2.pack(fill="x", padx=8, pady=8)
@@ -125,6 +127,9 @@ class TransferMixin:
         self.received_listbox.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         self.received_listbox.bind("<Double-Button-1>", self._safe(lambda e: self._open_selected_received_file()))
         self.received_listbox.bind("<Return>", self._safe(lambda e: self._open_selected_received_file()))
+        # drag received / sent files out of the tool into Explorer, a browser upload box, WhatsApp Web, the Clip Shelf ...
+        dnd.drag_source(self.received_listbox, lambda e: self._drag_file_payload(self.received_listbox, e, self._received_paths))
+        dnd.drag_source(self.sent_listbox, lambda e: self._drag_file_payload(self.sent_listbox, e, [Path(x.get("path", "")) if x.get("kind") != KIND_FILE_ADB else None for x in self._sent_entries]))
 
         # earlier files (history is saved on disk) so the lists aren't empty after a restart
         for e in self.server.history.list([KIND_FILE_FROM_PHONE], include_cleared=False)[-40:]:
@@ -436,6 +441,7 @@ class TransferMixin:
             self._clear_folder_contents(folder)
             self.server.history.clear_scope(SCOPE_PHONE_FILES)
             self.sent_listbox.delete(0, "end")
+            self._sent_entries.clear()
             log.info("Cleared share folder: %d file(s), %s", n, _fmt_size(size))
 
     # ---- received list -------------------------------------------------- #
@@ -454,8 +460,35 @@ class TransferMixin:
     def _add_sent_row(self, e: dict):
         how = "USB/Wi-Fi ADB -> phone gallery" if e.get("kind") == KIND_FILE_ADB else "Wi-Fi share"
         self.sent_listbox.insert(0, f"  {fmt_dt(e['ts'])}   {e.get('name', '?')}   ({_fmt_size(int(e.get('size') or 0))})   [{how}]")
+        self._sent_entries.insert(0, e)
         if self.sent_listbox.size() > 200:
             self.sent_listbox.delete("end")
+            self._sent_entries.pop()
+
+    def _open_sent_file(self):
+        sel = self.sent_listbox.curselection()
+        if sel and sel[0] < len(self._sent_entries):
+            e = self._sent_entries[sel[0]]
+            if e.get("kind") != KIND_FILE_ADB and Path(e.get("path", "")).exists():
+                self._open_path(e["path"])
+
+    def _drag_file_payload(self, listbox, event, paths):
+        """Drag a file row out of the tool. Returns ('files', [path]) or None (nothing under the pointer / file gone)."""
+        idx = dnd.row_at_pointer(listbox, event)
+        if idx is None or idx >= len(paths) or paths[idx] is None:
+            return None
+        p = Path(paths[idx])
+        if not p.exists():
+            log.warning("Cannot drag '%s' - the file no longer exists", p)
+            return None
+        return ("files", [str(p)])
+
+    def _drag_text_payload(self, listbox, event, entries):
+        """Drag a text row out of the tool as plain text (drop it into any text box, the Clip Shelf, a browser ...)."""
+        idx = dnd.row_at_pointer(listbox, event)
+        if idx is None or idx >= len(entries):
+            return None
+        return ("text", entries[idx]["text"])
 
     def _on_history_entry(self, entry: dict):
         """Called from any thread whenever something is recorded in the history."""
@@ -506,6 +539,7 @@ class TransferMixin:
                                        highlightbackground=theme.PANEL_BORDER, font=theme.FONT, activestyle="none")
         self.text_listbox.pack(fill="x", padx=8, pady=6)
         self.text_listbox.bind("<<ListboxSelect>>", self._safe(lambda e: self._on_text_select()))
+        dnd.drag_source(self.text_listbox, lambda e: self._drag_text_payload(self.text_listbox, e, self._text_entries))
 
         self.text_preview = tk.Text(top, height=8, wrap="word", state="disabled")
         theme.style_log_widget(self.text_preview)
@@ -527,6 +561,7 @@ class TransferMixin:
                                             highlightbackground=theme.PANEL_BORDER, font=theme.FONT, activestyle="none")
         self.sent_text_listbox.pack(fill="x", padx=8, pady=8)
         self.sent_text_listbox.bind("<<ListboxSelect>>", self._safe(lambda e: self._on_sent_text_select()))
+        dnd.drag_source(self.sent_text_listbox, lambda e: self._drag_text_payload(self.sent_text_listbox, e, self._sent_text_entries))
 
         send = ttk.LabelFrame(tab, text="Send text to phone  (Ctrl+Enter)")
         send.pack(fill="x", padx=12, pady=(6, 12))

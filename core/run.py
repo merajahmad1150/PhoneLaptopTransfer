@@ -95,7 +95,22 @@ def _install_console_handler(log, server):
         log.warning("Console-close handler unavailable", exc_info=True)
 
 
+def _preload(box: dict) -> None:
+    """Import Flask, waitress, qrcode, Pillow and the web server in a background thread, so the start-up dialog
+    appears immediately instead of after 5-10 s of imports (seen in the logs: 'packages 5.3-10.7s')."""
+    import time as _t
+    t0 = _t.perf_counter()
+    try:
+        box["missing"] = _check_dependencies()
+        if not box["missing"]:
+            import web_server  # noqa: F401  (pulls in Flask/Werkzeug/Jinja/qrcode/Pillow)
+    except Exception as exc:                      # reported after the dialog
+        box["error"] = exc
+    box["secs"] = _t.perf_counter() - t0
+
+
 def main() -> int:
+    import threading as _threading
     import time as _time
     t_begin = _time.perf_counter()
     _set_console_title()
@@ -111,23 +126,11 @@ def main() -> int:
     log.info("Configuration: %s", redacted(cfg))
 
     t_cfg = _time.perf_counter()
-    missing = _check_dependencies()
-    t_deps = _time.perf_counter()
-    if missing:
-        log.critical("Missing Python packages: %s  - run Start.bat again (it installs them with uv)", ", ".join(missing))
-        print("\nMISSING PACKAGES: " + ", ".join(missing) + "\nRun Start.bat again - it installs them automatically with uv.")
-        return 3
-
+    preload_box = {}
+    preloader = _threading.Thread(target=_preload, args=(preload_box,), name="Preload", daemon=True)
+    preloader.start()
     if args.no_start_server:
         cfg["auto_start_server"] = False
-
-    import room_manager
-    from web_server import TransferServer
-    server = TransferServer(cfg)
-    room_manager.purge_orphans()
-    t_server = _time.perf_counter()
-    log.info("Start-up timing: config %.1fs | packages %.1fs | server %.1fs (a slow first start after a reboot is "
-             "usually the disk or antivirus scanning the packages)", t_cfg - t_begin, t_deps - t_cfg, t_server - t_deps)
 
     mode = args.mode or cfg.get("startup_mode", "ask")
     if mode not in ("ask", "gui", "web"):
@@ -158,6 +161,25 @@ def main() -> int:
         if remember:
             cfg["startup_mode"] = chosen
             save_config(cfg)
+
+    # The packages were loading in the background while the dialog was open - wait for them now.
+    t_wait = _time.perf_counter()
+    preloader.join()
+    waited = _time.perf_counter() - t_wait
+    if preload_box.get("missing") or preload_box.get("error"):
+        problem = ", ".join(preload_box.get("missing") or []) or repr(preload_box.get("error"))
+        log.critical("Could not load the required packages (%s) - run Start.bat again (it installs them with uv)", problem)
+        print("\nMISSING OR BROKEN PACKAGES: " + problem + "\nRun Start.bat again - it installs them automatically with uv.")
+        if root is not None:
+            root.destroy()
+        return 3
+    import room_manager
+    from web_server import TransferServer
+    server = TransferServer(cfg)
+    room_manager.purge_orphans()
+    log.info("Start-up timing: config %.1fs | packages %.1fs (loaded in the background while the dialog was open; "
+             "waited only %.1fs afterwards) | server %.1fs",
+             t_cfg - t_begin, preload_box.get("secs", 0.0), waited, _time.perf_counter() - t_wait - waited)
 
     if mode == "web":
         if root is not None:

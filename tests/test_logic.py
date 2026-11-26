@@ -46,4 +46,35 @@ w = P.PublicUrlWatcher({"server_port": 8765, "auto_detect_public_url": True}); w
 P._run = lambda args, timeout=20: (0, j, ""); w._check_once(); ok(w.state["url"].endswith(":8443/") and w._wait == 30, "link shown; polling relaxes to 30 s")
 P._run = lambda args, timeout=20: (124, "", "timed out"); w._check_once(); ok(w.state["url"].endswith(":8443/"), "link kept while Tailscale is slow (the hourly flapping bug)")
 P._run = lambda args, timeout=20: (0, "{}", ""); w._check_once(); ok(w.state["url"] == "", "link removed once Tailscale clearly says nothing is published")
+# --- the tooltip bug that made the main window impossible to close ---
+import types
+tk_stub = types.ModuleType("tkinter"); tk_stub.TclError = type("TclError", (Exception,), {}); tk_stub.Toplevel = object; tk_stub.Label = object
+sys.modules["tkinter"] = tk_stub
+import tooltip as TT
+class FakeWidget:
+    def __init__(self): self.bound, self.cancelled, self.n = {}, [], 0
+    def bind(self, seq, fn, add=None): self.bound[seq] = fn
+    def after(self, ms, fn): self.n += 1; return f"after#{self.n}"
+    def after_cancel(self, i): self.cancelled.append(i)
+ev = types.SimpleNamespace(x_root=1, y_root=2)
+a, b = FakeWidget(), FakeWidget(); TT.add_tooltip(a, "tip A"); TT.add_tooltip(b, "tip B")
+a.bound["<Enter>"](ev); a.bound["<Leave>"](ev)
+ok(a.cancelled == ["after#1"], "a pending tooltip is cancelled through the widget that scheduled it (cause of 'can't delete Tcl command' on close)")
+a.bound["<Enter>"](ev); b.bound["<Enter>"](ev)
+ok(a.cancelled == ["after#1", "after#2"] and b.cancelled == [], "moving to another widget cancels the first widget's timer through the first widget")
+del sys.modules["tkinter"]
+import dnd as DND
+class FakeList:
+    def __init__(self, n): self.n = n; self.sel = None
+    def winfo_pointery(self): return 150
+    def winfo_rooty(self): return 100
+    def nearest(self, y): return min(int(y // 20), self.n - 1)
+    def size(self): return self.n
+    def bbox(self, i): return (0, i * 20, 100, 20)
+    def selection_clear(self, a, b): self.sel = None
+    def selection_set(self, i): self.sel = i
+lst = FakeList(5)
+ok(DND.row_at_pointer(lst, types.SimpleNamespace(y_root=145)) == 2 and lst.sel == 2, "drag events (x_root/y_root only) find the row under the pointer")
+ok(DND.row_at_pointer(FakeList(2), types.SimpleNamespace(y_root=300)) is None, "pointer below the last row drags nothing")
+ok(DND.row_at_pointer(lst, types.SimpleNamespace()) == 2, "falls back to the pointer position")
 print("\nALL LOGIC TESTS PASSED"); L.end_session("tests")

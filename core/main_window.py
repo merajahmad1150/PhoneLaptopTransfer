@@ -474,4 +474,14 @@ class MainWindow(TransferMixin, MirrorMixin, NetworkMixin, ToolsMixin, SelfTestM
         except Exception:
             log.error("Error during shutdown", exc_info=True)
         finally:
-            self.root.destroy()
+            try:
+                self.root.destroy()
+            except Exception:
+                # Never leave the program running because a widget refused to be destroyed.
+                log.error("The window could not be destroyed cleanly - forcing the program to exit", exc_info=True)
+                try:
+                    import logger
+                    logger.end_session("closed (forced after a window error)")
+                finally:
+                    import os
+                    os._exit(0)
